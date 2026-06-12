@@ -1,0 +1,14 @@
+# Core graph framework (hand-write all LangGraph code yourself -- see DECISIONS.md)
+langgraph
+langgraph-checkpoint-sqlite
+langgraph-checkpoint-mongodb
+langchain
+langchain-openai
+
+# Data layer
+pymongo
+pinecone
+
+# Utilities
+python-dotenv
+tqdm
