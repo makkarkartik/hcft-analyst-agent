@@ -4,6 +4,7 @@ __pycache__/
 .env
 data/
 *.sqlite
+*.archive.gz
 .pytest_cache/
 
 # Learning artifacts — local only, never part of the project repo

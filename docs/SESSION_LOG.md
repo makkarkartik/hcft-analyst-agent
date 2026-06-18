@@ -1,0 +1,220 @@
+# HCFT Agentic Project — Session Log & Eval Architecture
+
+> Portable record of the design conversation so it's available on any machine / tool
+> after `git pull` (Cursor, Claude Code, web). Captures the project re-scope, the
+> evaluation & safety theory covered, the architecture diagram, and the decisions
+> (locked + open). Last updated: 2026-06-18.
+
+---
+
+## 1. Project re-scope (decisions)
+
+- **Goal:** use this project as a learning vehicle for LangGraph, agent performance /
+  quality / safety evaluation, benchmarking, and the validation & guardrails enterprises
+  use — *with the theory behind each*, not just the code.
+- **Foundation:** fresh build, **reuse only the data layer** (Pinecone `hcft` index +
+  Mongo `hcft.chunks` + the retrieval logic). Everything above that is built new.
+- **Working model:** Claude implements; **the user is the architect on every technical
+  decision, big and small.** Each fork is surfaced as
+  `Decision → Options (with cost) → recommendation (+ why) → user's call`.
+- **Three agents to build** (all scoped to the HCFT corpus):
+  1. **RAG chat** — grounded Q&A with self-correction (grade → rewrite → regenerate) and
+     clean refusal when the corpus can't answer.
+  2. **Deep analysis** — Mongo aggregation agent + map-reduce multi-report synthesis.
+  3. **Code-gen — full sandboxed coder** — NL→query + analysis + viz, with the enterprise
+     story: capability scoping, AST allowlist, test-before-commit, subprocess sandbox.
+- **Sequencing:** **eval / benchmarking / guardrails theory first**, so evaluability and
+  guardrails are baked into the architecture from line one instead of bolted on.
+
+---
+
+## 2. The data layer (reused as-is)
+
+- **Pinecone** index `hcft` — 768-dim, cosine, **vectors only** (cloud-hosted → reachable
+  from any machine with the API key; nothing to port).
+- **MongoDB** `hcft.chunks` — **519,555 docs** (chunk text + metadata). Local / dockerized
+  (`hcft-mongo`). Portable via `mongodump --gzip --archive`.
+- **Retriever:** Qwen3-Embedding-4B → Pinecone dense top-k=50 → Mongo hydrate →
+  BGE-reranker-v2-m3 → top context (~5 sources).
+
+### Verified HCFT eval numbers (source of truth = `mlflow.db` + project briefing)
+
+| Model | ROUGE-L | BERTScore |
+|---|---|---|
+| Tuned 3B (RAG, `v2_2`) | **0.497** | **0.544** |
+| gpt-4o-mini | 0.441 | 0.475 |
+| stock Llama 3.2 3B | 0.365 | 0.359 |
+
+- Retrieval after BGE rerank: **hit@1 0.66 · hit@5 0.84 · MRR 0.74 · nDCG@10 0.78**.
+- **Caveat (load-bearing):** the 3B beats gpt-4o-mini **only on overlap metrics**; it
+  **trails ~6 pts on the LLM judge**, and neutral-panel parity is proven for v1 only.
+  Scope all claims to "overlap quality" — never "gpt-4o-mini-class judge."
+
+---
+
+## 3. The eval & safety stack (theory map)
+
+Six layers, roughly in the order things must *exist*:
+
+| # | Layer | Core question |
+|---|---|---|
+| 0 | **What you're evaluating** | Four distinct objects people conflate |
+| 1 | **Methods** | Reference-based · reference-free/LLM-judge · human · programmatic asserts |
+| 2 | **The LLM-judge problem** | Why it scales, why it's circular, what breaks the circularity |
+| 3 | **Benchmarking** | Bespoke held-out sets, test-set construction, statistical rigor, regression gates |
+| 4 | **Guardrails** | Input / output / **action** (the agent-specific hard part) |
+| 5 | **Observability** | Tracing / spans / cost — the substrate that makes 0–3 possible |
+
+---
+
+## 4. Box 0 — the four objects of evaluation
+
+Each needs a **different method** and a **different data shape**; all are computable from
+**one structured trace per run**.
+
+| Object | What | HCFT example | Method |
+|---|---|---|---|
+| **Component** | each piece in isolation | retrieval hit@5 0.84, reranker lift, reader@oracle | reference-based (deterministic) |
+| **Outcome** | final answer vs intent | ROUGE-L 0.497, BERTScore 0.544, RAGAS, judge panel | reference + **LLM-judge** ← circularity |
+| **Trajectory** | the *path*, not the answer | right tool? retries ≤ N? no rewriter-collapse? routed right? | **programmatic asserts on the trace** |
+| **Operational / safety** | pass/fail gates | latency, cost, refusal acc, citation validity, PII, sandbox | programmatic + guardrail checks |
+
+> A trajectory can be perfect with a wrong outcome (good process, bad luck) or a right
+> outcome on a broken trajectory (lucky — fails tomorrow). Score them **separately**.
+
+**Architecture consequence (locked):** every agent emits a structured trace
+`{input, tool_calls, retrieved_ids, retries, answer, citations, tokens, latency}` from
+line one. Bolt it on later → re-run everything.
+
+---
+
+## 5. Box 2 — the LLM-judge circularity problem (deep dive)
+
+### Definition — it's *correlated error*
+If the judge shares training data / model family / biases with the generator, the judge's
+mistakes line up **in the same direction** as the generator's. The eval is structurally
+blind to the failure modes they share. Degenerate case: same model generates and judges →
+**self-preference** — the score measures "agreement with itself," not correctness.
+
+### HCFT worked example
+The synthetic QA was distilled from a **gpt-5 teacher** → GPT-flavored distribution. A
+**GPT-family judge** would have *inflated* the 3B's score by rewarding inherited phrasing.
+The honest signal exists *because* the project judged with a **neutral Gemma panel**. The
+overlap metrics and the judge **disagree (~6 pts)** — and that disagreement is the honest
+information.
+
+### Bias catalog
+| Bias | Effect | Mitigation |
+|---|---|---|
+| Self-preference | rates own/same-family higher | cross-family judge or panel |
+| Position bias | favors answer A or B by slot | swap order, average; require consistency |
+| Verbosity bias | prefers longer (toxic for grounded QA) | length control; penalize unsupported additions |
+| Format/confidence | rewards confident tone, markdown | rubric anchored on substance |
+| Sycophancy/anchoring | drifts toward hinted answer | don't leak the reference into the judge prompt |
+| Non-determinism | same input → different score | sample N, report variance not a point |
+| Low discrimination | clusters at 4/5 | atomic binary judgments, not holistic 1–5 |
+
+### RAGAS — better conditioning, **not** an escape
+Mechanism: decompose answer into atomic claims (LLM) → binary NLI "supported by retrieved
+context?" per claim (LLM) → score = supported/total (deterministic arithmetic). Buys lower
+variance + anchoring to a concrete artifact + arithmetic aggregation. **But every atomic
+step is still an LLM judgment** — family self-preference and misreads still propagate.
+RAGAS = a lower-variance, better-conditioned LLM judge, not non-LLM ground truth.
+
+### What actually breaks circularity
+1. **Human-anchored slice + agreement metrics** — label ~50–100 examples; score the *judge*
+   against humans (κ, precision/recall). "Evaluate the evaluator" → quote the judge's own
+   error rate. **The move that matters most.**
+2. **Non-LLM reference metric** (ROUGE-L / BERTScore) — fails *differently* than the judge,
+   so agreement = convergent validity, disagreement = localized failure.
+3. **Judge diversity / panel** — 2–3 families, majority/variance; decorrelates
+   self-preference.
+
+> **Punchline:** you can't build a bias-free judge. The goal is to **measure, bound, and
+> decorrelate** judge error so no two signals share the same blind spot, and the judge
+> always carries a human-measured error bound.
+
+---
+
+## 6. Eval architecture diagram
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│  AGENT RUN  (RAG chat │ deep analysis │ code-gen)                          │
+│      └──►  emit ONE STRUCTURED TRACE   ◄── the line-one design decision     │
+│           { input · tool_calls · retrieved_ids · retries ·                 │
+│             answer · citations · tokens · latency }                        │
+└───────────────────────────────────┬────────────────────────────────────────┘
+                                     │   all four objects are computed from it
+     ┌───────────────┬───────────────┼───────────────┬────────────────────┐
+     ▼               ▼               ▼               ▼
+┌───────────┐  ┌────────────────┐ ┌────────────┐ ┌────────────────────┐
+│ COMPONENT │  │   OUTCOME      │ │ TRAJECTORY │ │ OPERATIONAL/SAFETY │
+├───────────┤  ├────────────────┤ ├────────────┤ ├────────────────────┤
+│ hit@5 .84 │  │ ROUGE-L  .497  │ │ right tool?│ │ latency · $tokens  │
+│ MRR   .74 │  │ BERTScore .544 │ │ retries≤N? │ │ refusal accuracy   │
+│ nDCG  .78 │  │ RAGAS faithful │ │ no rewriter│ │ citations valid?   │
+│ reader @  │  │ judge panel    │ │  collapse? │ │ PII? sandbox held? │
+│  oracle   │  │ (1–5 secondary)│ │ routed ok? │ │                    │
+├───────────┤  ├────────────────┤ ├────────────┤ ├────────────────────┤
+│ REFERENCE │  │ REFERENCE +    │ │ PROGRAMMATIC│ │ PROGRAMMATIC +     │
+│ gold IDs  │  │ LLM-JUDGE      │ │ assert on   │ │ guardrail checks   │
+│ ✓determ.  │  │ ◄ CIRCULARITY  │ │ the trace   │ │ ✓determ. pass/fail │
+└───────────┘  └───────┬────────┘ └────────────┘ └────────────────────┘
+                       │ the ONLY un-trustworthy-by-default method
+        ┌──────────────┴───────────────────────────────────┐
+        │  CIRCULARITY-BREAKERS  (put a bound on the judge) │
+        │   1. Human slice ~50   → κ / precision-recall     │
+        │   2. Non-LLM ref (ROUGE/BERT) → fails differently │
+        │   3. Cross-family panel → kills self-preference   │
+        └──────────────────────────┬────────────────────────┘
+                                   ▼
+        ┌───────────────────────────────────────────────────┐
+        │  REGRESSION GATE (CI):  each object → pass/fail     │
+        │  → ship / no-ship signal,  not a vanity dashboard  │
+        └───────────────────────────────────────────────────┘
+```
+
+```mermaid
+flowchart TD
+    RUN["Agent run: RAG chat / deep analysis / code-gen"] --> TRACE["Structured Trace<br/>input · tool_calls · retrieved_ids<br/>retries · answer · citations · tokens · latency"]
+    TRACE --> COMP["COMPONENT<br/>each piece alone"]
+    TRACE --> OUT["OUTCOME<br/>answer vs intent"]
+    TRACE --> TRAJ["TRAJECTORY<br/>the path, not the answer"]
+    TRACE --> OPS["OPERATIONAL / SAFETY<br/>pass-fail gates"]
+    COMP --> COMPM["Reference-based · deterministic<br/>hit@5 .84 · MRR .74 · nDCG .78"]
+    OUT --> OUTM["Reference + LLM-judge<br/>ROUGE .497 · BERT .544 · RAGAS · panel<br/>CIRCULARITY LIVES HERE"]
+    TRAJ --> TRAJM["Programmatic asserts on trace<br/>right tool? retries bounded? routing?"]
+    OPS --> OPSM["Programmatic + guardrails<br/>latency · cost · refusal · citations · PII · sandbox"]
+    OUTM --> BREAK["Circularity-breakers<br/>1. Human slice ~50 measures judge error<br/>2. Non-LLM ref fails differently<br/>3. Cross-family panel kills self-preference"]
+    COMPM --> GATE["Regression gate CI<br/>each object to pass/fail to ship/no-ship"]
+    BREAK --> GATE
+    TRAJM --> GATE
+    OPSM --> GATE
+```
+
+**Method trust ranking (raw):** reference-based (high, needs gold) · programmatic asserts
+(high, most underused) · **LLM-judge (low until anchored)** · human (gold, expensive —
+spend only on the ~50-slice).
+
+---
+
+## 7. Decisions — locked & open
+
+**Locked**
+- Four-object taxonomy is the spine of the eval harness.
+- Structured trace emitted from line one (everything is computed from it).
+
+**Recommended (pending user confirm)**
+- Outcome-eval judge strategy: **cross-family 2-judge panel** + **RAGAS-decomposed
+  faithfulness** as primary + **holistic 1–5 as coarse secondary** + a **~50-example
+  human-anchor slice** baked in from day one.
+
+**Open fork**
+- Commit to the **~50-example human-anchor slice** (rigorous, JD-core, user's labeling
+  effort later) vs. run judge-only (cheaper, but no measured error bound on the judge)?
+
+**Next**
+- **Box 3 — benchmarking:** test-set construction, statistical rigor (sample size, CIs,
+  significance, judge-variance), and the **regression gate**. This is where the anchor
+  slice and the held-out set actually get designed.
