@@ -1,53 +1,92 @@
-# PLAN.md — locked scope (2026-06-12)
+# PLAN.md — locked scope (rev 2026-06-13, JD-aligned)
 
-Primary goal: **LangGraph interview readiness through hands-on implementation.**
-Secondary goal: a public portfolio piece connecting to the HCFT fine-tuning project.
-Budget: **24 hours**. Changes to this plan require a deliberate decision logged in `DECISIONS.md`.
+**Target role:** Senior Technical Lead, Autonomous Agentic Frameworks & System Integration
+(Cisco CX). A **build-and-lead** role: design/build/deploy agents *and* own roadmap, risk, and
+delivery. This plan is scoped to that JD.
+
+Primary goal: **interview readiness for a senior agentic-systems lead** — defensible judgment
+backed by a real, measured build. Secondary goal: a public portfolio piece connecting to the
+HCFT fine-tuning project. Budget: **~24h hands-on**; anything beyond is **designed & cost-modeled**
+(honesty ladder), not faked. Changes here require a decision logged in `DECISIONS.md`.
 
 ## Locked decisions
 
 1. **What we're building:** the HCFT Analyst Agent — a LangGraph supervisor routing between
    (a) a self-corrective RAG research agent, (b) a MongoDB analytics agent, and (c) a
    map-reduce synthesis agent, over the existing HCFT corpus (519,555 chunks).
-2. **Working method:** all LangGraph code hand-written (AI = reviewer only); predict-before-run;
-   factsheet entry per milestone written immediately; one commit per milestone stating the
-   design decision. (Full rules at the top of `DECISIONS.md`.)
-3. **Stack:** Pinecone `hcft` (reused, unchanged) + BGE-v2-m3 rerank + MongoDB in Docker
-   (text hydration, analytics, LangGraph checkpointer). DONE: migration + indexes.
-4. **Models:** tool-capable public model (Fireworks / gpt-4o-mini) as orchestrator + graders
-   for all milestones. The reader/generation slot is OpenAI-compatible and swappable.
-5. **Reader swap (M7):** `raft-3b-r64-v2_2` merged with PEFT `merge_and_unload()` (rsLoRA-aware
-   — see README lineage note) → GGUF → Ollama. The fine-tune is NEVER the orchestrator.
-   vLLM stays architected-not-operated. Timebox 3h; fallback = transformers behind FastAPI shim.
-6. **Headline deliverable:** same 20-question eval, frontier reader vs raft-3b reader in the
-   same slot — groundedness, refusal accuracy, latency, cost/query. Supporting experiments:
-   agentic vs plain RAG (M2/M6), supervisor vs single agent (M4), checkpointer overhead (M3).
-7. **Public repo rules:** code public; reproducible quickstart = FAISS + bundled subset
-   (strangers can't reach Pinecone/local Ollama); no HCFT_Medium content ever.
+2. **Working method (rev 2026-06-13 — "AI builds, you architect"):** M0–M1 were hand-typed and
+   stand as proof-of-hands. From M2 on, the AI authors implementation and we spend the reclaimed
+   time on **architect/lead work**: trade-off interrogation, failure-mode analysis, alternative
+   architectures, eval/observability/security rigor, and system-design reps. Retention rituals
+   kept: predict-before-run, **learner writes every `DECISIONS.md` entry**, per-file Q&A. One
+   commit per milestone. Rationale: senior interviews test judgment, not syntax Cursor writes.
+3. **Stack:** Pinecone `hcft` (reused) + BGE-v2-m3 rerank + MongoDB in Docker (text hydration,
+   analytics, LangGraph checkpointer). Graphs are **async** (`async def` nodes, `astream`). DONE:
+   Mongo migration + indexes; real retriever (Qwen3 embed → Pinecone → rerank → Mongo hydrate).
+4. **Models:** public tool-capable model (OpenAI `gpt-4o-mini`) as orchestrator + graders. The
+   reader/generation slot is OpenAI-compatible and swappable (frontier now → `raft-3b` in M9).
+5. **Reader swap:** `raft-3b-r64-v2_2` merged with PEFT `merge_and_unload()` (rsLoRA-aware) →
+   GGUF → Ollama. The fine-tune is NEVER the orchestrator. vLLM stays designed-not-operated.
+6. **Headline deliverable:** frontier reader vs `raft-3b` reader in the same slot — groundedness,
+   refusal accuracy, latency, cost/query — plus the evals-driven-development story (the JD's core).
+7. **Public repo rules:** code public; reproducible quickstart = FAISS + bundled subset; no
+   HCFT_Medium content ever.
 
-## Schedule (24h total, ~3h buffer)
+## JD coverage map (living checklist)
 
-| # | Milestone | Budget | Core interview topics |
+> Source of truth = `JD.md` (verbatim posting + full reconciliation table). Summary below.
+
+Minimum quals:
+- ✅ Design/develop/deploy agents & orchestration patterns → M2–M4.
+- ⬆️ **Evals-driven development + observability for non-deterministic systems** → M5 + M6 (JD core; elevated to primary).
+- ✅ Python; LangChain/LangGraph → throughout.
+- ⬆️ **Asynchronous programming (multi-step agents)** → async graphs from M2.
+- ✅ **MCP / tool-integration for enterprise** → M8 (built basic).
+- ⚠️ **Cloud data platform (Snowflake)** → bridge from Databricks (SLM stage-02); Snowflake + Cortex **designed & cost-modeled**, not operated. *(Real gap — transferable, not faked.)*
+- ⚠️ Jira/GitHub → GitHub used; **Jira not used** — concede + frame Agile/SDLC/backlog.
+
+Preferred:
+- ✅ Frontier **and** open-source LLM ecosystems → M9 frontier-vs-`raft-3b`.
+- ✅ Understand LLMs / **train & focus on specific areas** → SLM RAFT fine-tune project (strong evidence).
+- ✅ **LLM optimization: prompting, fine-tuning, context mgmt, reduce hallucinations** (JD "Your Impact") → SLM RAFT + M2 self-corrective/groundedness RAG.
+- ✅ NLP & prompt engineering → per-node system prompts (M2+).
+- ⬆️ **Enterprise security & agentic access control** → M7 (tool permission scoping, AST allowlist + sandboxed test-before-freeze, HITL approval).
+- ✅ AI dev tools (Claude Code/Codex/**Cortex**) → Cursor used to build; Cortex in Tier-3 design.
+- ✅ Leadership / deliverables / risk to stakeholders → `PLAN.md` = roadmap; `DECISIONS.md` = risk/decision log; stakeholder summary (to produce).
+
+Verbal-only (don't build): JD names **AutoGen / CrewAI** beside LangGraph — be ready to contrast
+when-to-pick-which rather than building all three.
+
+## Schedule (Tier-1 = built locally; Tier-3 = designed & cost-modeled)
+
+| # | Milestone | Tier | JD hook |
 |---|---|---|---|
-| M0 | Hello graph, built cold as self-test | 0.75h | state, reducers, super-steps |
-| M1 | ReAct loop from scratch + retriever tool | 3h | tool loop, prebuilt vs hand-rolled |
-| M2 | Self-corrective RAG subgraph | 3h | cycles, structured-output routing, recursion_limit |
-| M3 | Checkpointing (Sqlite→Mongo), interrupt(), time travel | 3h | durable execution, HITL, forking |
-| M4 | Supervisor + Send map-reduce + comparison experiment | 4h | Send vs Command, subgraph state mapping |
-| M5 | Streaming + tracing | 2.5h | stream modes, astream_events |
-| M6 | Eval + retries/hardening | 2.5h | RetryPolicy, headline numbers |
-| M7 | Reader swap + comparison eval | 3h | serving boundary, rsLoRA merge, template parity |
-| — | Factsheet rehearsal + README/diagram polish | 2h | everything, out loud |
+| M0 | Hello graph (hand-built) ✅ | 1 | state/reducers/super-steps |
+| M1 | ReAct loop (hand-built) ✅ | 1 | tool loop, prebuilt vs hand-rolled |
+| M2 | Self-corrective RAG, **async** | 1 | cycles, structured-output routing, hallucination control |
+| M3 | Persistence (Sqlite→Mongo) + HITL `interrupt()` + time travel | 1 | durable execution, human-in-the-loop |
+| M4 | Supervisor + specialists + `Send` map-reduce (+ swarm variant) | 1 | multi-agent orchestration |
+| M5 | Streaming + **observability/tracing** | 1 | observability for non-determinism |
+| M6 | **Evals-driven dev:** trajectory + outcome + RAGAS faithfulness + regression gate | 1 | evals (JD core) |
+| M7 | **Security & access control:** tool permission scoping, AST allowlist + sandboxed test-before-freeze, HITL approval | 1 | enterprise security/access |
+| M8 | **MCP server** exposing the tools | 1 (basic) | MCP / enterprise tool integration |
+| M9 | Reader swap (`raft-3b` via Ollama) + comparison eval | 1 (fallback designed) | frontier + OSS ecosystems |
+| — | Snowflake + Cortex serving path | 3 | cloud data platform (bridge from Databricks) |
+| — | Leadership artifacts (roadmap, risk log, stakeholder summary) + factsheet + arch diagram | — | lead/delivery |
+
+> Time risk: M2–M9 all Tier-1 is more than 24h if everything is gold-plated. Rule: get each to a
+> **working, measured** state, then stop; push depth into `DECISIONS.md` rather than more code.
 
 ## Out of scope (do not gold-plate)
 
 - New retriever/dataset work (BM25/RRF hybrid stays Phase-2 in the HCFT repo).
-- Polished UI — console streaming or bare Gradio only.
-- vLLM, MCP server, Airflow, long-term memory store (stretch only if under budget after M7).
+- Polished UI — console/SSE streaming or bare Gradio only.
+- Airflow, long-term cross-thread memory store (stretch only).
 - Any further fine-tuning. Model weaknesses get system-level fixes (grading/refusal gates).
 
 ## Definition of done
 
-1. All milestone checkboxes in README ticked, with the comparison table filled with real numbers.
-2. `DECISIONS.md` complete — every milestone has its interview answer + trade-off entry.
-3. You can answer the M0–M7 interview topics out loud, pointing at code you wrote.
+1. M2–M9 each reach a working, measured state; README checkboxes ticked; comparison table filled.
+2. `DECISIONS.md` complete — every milestone has interview-answer + trade-off + failure-mode notes.
+3. You can whiteboard the architecture and answer the JD's judgment topics (evals, observability,
+   multi-agent cost, security, async, frontier-vs-OSS) out loud, pointing at code you shipped.

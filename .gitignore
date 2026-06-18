@@ -5,3 +5,6 @@ __pycache__/
 data/
 *.sqlite
 .pytest_cache/
+
+# Learning artifacts — local only, never part of the project repo
+src/hcft_agent/scratch/

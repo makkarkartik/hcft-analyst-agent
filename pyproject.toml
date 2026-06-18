@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hcft-agent"
+version = "0.1.0"
+description = "LangGraph multi-agent analyst over the HCFT healthcare report corpus"
+requires-python = ">=3.11"
+# Runtime deps are pinned in requirements.txt; this package is installed with `pip install -e .`
+
+[tool.setuptools.packages.find]
+where = ["src"]

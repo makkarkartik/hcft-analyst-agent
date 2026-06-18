@@ -9,6 +9,15 @@ langchain-openai
 pymongo
 pinecone
 
+# Real retrieval stack (stage-06 parity: Qwen3 query embedding + BGE rerank)
+# Install torch FIRST from the CUDA 12.4 index:
+#   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+# Versions pinned to match the SLM_Fine_Tuning venv so the shared HF model cache is reused.
+torch==2.5.1
+sentence-transformers==5.5.1
+transformers==4.54.1
+numpy<2
+
 # Utilities
 python-dotenv
 tqdm

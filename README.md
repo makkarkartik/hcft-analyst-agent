@@ -32,6 +32,13 @@ eval compares the two in the same slot on groundedness, refusal accuracy, latenc
 - [ ] M6 eval + hardening
 - [ ] raft-3b reader swap (merge → GGUF → Ollama) + comparison eval
 
+## Repository layout
+
+- `src/hcft_agent/` — the system: `config.py` (settings + swappable model slots),
+  `graphs/` (the production LangGraph graphs — research / analytics / synthesis / supervisor),
+  and the tools they use.
+- `scripts/` — one-shot data plumbing (Mongo migration, verification).
+
 ## Stack
 
 | Component | Choice | Notes |
