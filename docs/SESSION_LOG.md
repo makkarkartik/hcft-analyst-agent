@@ -320,17 +320,45 @@ fields (`input_flags`, `output_grounded`, `action_allowed`, `sandbox_result`).
 **Decisions (locked):**
 - **Threat model = untrusted everything**, incl. retrieved docs → defend indirect prompt
   injection (detect on user input AND retrieved chunks).
-- **Build = hybrid:** own the action ring (AST allowlist + sandbox + HITL + test-before-
-  commit), adopt the input ring (Llama Guard / Prompt Guard + a library for injection/PII).
+- **Build = adopt tools (per ground rule 2026-06-19):** input ring = Llama Guard / Prompt
+  Guard / NeMo / Guardrails AI; action ring = sandbox tool (E2B / Docker / RestrictedPython)
+  + `bandit`/`ast` for AST checks + LangGraph `interrupt()` for HITL. (Supersedes the earlier
+  "own the action ring" choice.)
 
 ---
 
-## 11. Theory arc COMPLETE → build
+## 11. Theory arc COMPLETE → build (library-first)
 
-All six boxes decided; the harness is fully specified. Build sequence for the skeleton:
-1. **Trace schema** (Pydantic) — the contract everything computes from (the four eval
-   objects, the gate, guardrail verdicts, the LangSmith mirror).
-2. **Gate runner** — overlap + programmatic-trajectory + safety/refusal as hard gates;
-   judge directional-only.
-3. **LangSmith wiring** (env vars) — automatic LangGraph tracing.
-4. First agent (**RAG chat**) emitting the trace end-to-end → first real numbers.
+**Ground rule (2026-06-19):** no hand-rolled implementation where a standard tool exists —
+own the *decisions*, adopt the *implementation*.
+
+## 12. Build-vs-buy: NO custom AgentRunTrace (decided 2026-06-19)
+
+Reasoned + web-verified. The "scattered run-data" worry (LangGraph state + LangSmith run +
+DeepEval test case) is already solved by a standard, so the custom Pydantic trace is dropped.
+
+**Revised stack:**
+- **Run record** = **OpenInference / OTel GenAI semantic conventions** (auto-instrumented
+  AGENT/LLM/RETRIEVER/TOOL spans + token/cost), plus our **`hcft.*` custom attributes** for
+  domain verdicts (refusal/route/groundedness/degraded). Vendor-neutral; LangSmith ingests
+  OTel → zero lock-in (swap to Phoenix/Langfuse by env var).
+- **Eval + trajectory + gate** = **DeepEval** (`@observe` + LangGraph `CallbackHandler`,
+  component & full-trace metrics incl. ToolCorrectness; pytest gate) + **RAGAS** +
+  **`evaluate`/`torchmetrics`** (ROUGE/BERTScore) + **DeepEval G-Eval** (custom refusal/
+  routing metrics).
+- **Obs / labeling** = **LangSmith** via OTel ingest + annotation queues.
+- **Action ring** = sandbox tool (E2B / Docker / RestrictedPython) + `bandit`/`ast`.
+
+Custom code (allowed): the LangGraph agent graphs, thin glue + `hcft.*` attribute constants,
+G-Eval metric definitions, and config (metrics/thresholds per agent).
+
+Sources: OTel GenAI agent spans · OpenInference · DeepEval component-level eval + LangGraph
+integration · LangSmith OpenTelemetry support.
+
+### Build sequence (P0 skeleton)
+1. Deps + repo restructure (move old m1/m2/m3 → `reference/`).
+2. **Telemetry**: OpenInference instrumentation + OTel→LangSmith exporter (env-driven) +
+   `hcft.*` attribute-constants module.
+3. **Eval wiring**: DeepEval CallbackHandler + RAGAS + G-Eval custom metrics + threshold
+   config (the gate).
+4. First agent (**RAG chat**) instrumented end-to-end → first real numbers.

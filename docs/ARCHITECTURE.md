@@ -47,7 +47,7 @@ Legend in diagrams:  `[G]` = guardrail fires here · `[E]` = eval signal capture
 ```
 
 Dispatch mechanism: router returns a `Command(goto=<subgraph>)`; each specialist is a
-compiled subgraph with its own state slice. One `AgentRunTrace` spans the whole run.
+compiled subgraph with its own state slice. One OpenInference/OTel trace spans the whole run.
 
 ---
 
@@ -106,7 +106,7 @@ Status: `☐ todo` · `◐ in progress` · `☑ done`.
 
 | Phase | Deliverable | Components | Status |
 |---|---|---|---|
-| **P0 Skeleton** | the contract + plumbing | `trace.py` (AgentRunTrace), gate runner, LangSmith wiring (env vars), repo restructure | ☐ |
+| **P0 Skeleton** | telemetry + eval plumbing | OpenInference instrumentation + OTel→LangSmith, DeepEval+RAGAS gate + G-Eval, `hcft.*` attrs, config, repo restructure | ☐ |
 | **P1 RAG chat** | first agent end-to-end | RAG subgraph + its `[G]`/`[E]` hooks, emits full trace → first real numbers | ☐ |
 | **P2 Chat graph** | orchestration | input guard, router, dispatch (Command), output guard, refuse path | ☐ |
 | **P3 Deep analysis** | analytic agent | NL→Mongo, query-safety guard, map-reduce synthesis | ☐ |
@@ -174,9 +174,9 @@ offline → eval degrades to overlap + programmatic (judge is directional anyway
 ---
 
 ## 7. Open decisions
-- **Orchestration pattern** — supervisor/router → subgraphs (proposed) vs single ReAct-with-tools
-  vs hierarchical delegation. *Recommended: supervisor/router.* Awaiting sign-off.
-- **Trace schema** — the 10-group `AgentRunTrace` (see SESSION_LOG / chat). Awaiting sign-off.
+- **Orchestration pattern** — ✅ APPROVED 2026-06-19: supervisor/router → specialist subgraphs.
+- **Run record** — ✅ RESOLVED 2026-06-19: OpenInference/OTel spans + DeepEval; no custom
+  `AgentRunTrace` (see SESSION_LOG §12).
 - **Retrieval fallback chain** — wire the FAISS local mirror as a Pinecone fallback, or just
   widen-top_k → BM25 → refuse? (FAISS needs the index ported.) To decide at P1.
 - **Fail-open/closed policy** — confirm: guards fail *closed*, observability fails *open*. *(Rec: yes.)*

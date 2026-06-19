@@ -13,7 +13,7 @@
 
 | Concept | One line | Where in our system | Status |
 |---|---|---|---|
-| Four-object taxonomy | component / outcome / trajectory / operational — the spine | `trace.py` feeds all four | 📖 |
+| Four-object taxonomy | component / outcome / trajectory / operational — the spine | OTel spans feed all four | 📖 |
 | Component eval | each piece (retriever, reader) in isolation | `eval/` retrieval + reader@oracle | 📖 |
 | Outcome eval | final answer vs intent | `eval/` outcome | 📖 |
 | Trajectory eval | the *path* taken, independent of answer | `eval/` trajectory asserts | 📖 |
@@ -101,12 +101,13 @@
 | Concept | One line | Where | Status |
 |---|---|---|---|
 | Tracing / spans | per-step capture of inputs/outputs/latency/cost | `obs/` | 📖 |
-| Structured trace schema | the Pydantic contract everything computes from | `trace.py` | 🔨 next |
+| OpenInference / OTel trace | standardized vendor-neutral agent-run spans (auto-instrumented) | `obs/` | 📖 |
+| `hcft.*` span attributes | domain verdicts on spans (refusal/route/grounded/degraded) | `obs/` | 📖 |
 | LangSmith (hosted) | reference LangGraph observability + datasets + annotation queues | `obs/` (env vars) | 📖 |
 | Langfuse (self-host alt) | OSS equivalent; the choice under a data-residency constraint | (documented alternative) | 📖 |
 | OpenTelemetry / OTel GenAI | vendor-neutral tracing standard | `obs/` exporter | 📖 |
 | Annotation queue | labeling UI for the anchor slice | LangSmith | 📖 |
-| Cost accounting / latency waterfall | token/$ + timing per run | `trace.py` + LangSmith | 📖 |
+| Cost accounting / latency waterfall | token/$ + timing per run | OTel spans + LangSmith | 📖 |
 
 ## G. Orchestration (LangGraph)
 
@@ -130,8 +131,24 @@
 | Fail-open (observability) | tracing failure never blocks the user | `obs/` | 📖 |
 | Circuit breaker | trip to fast-fail after repeated dependency failure | retriever / LLM / judge | 📖 |
 | Bounded everything | caps on retries/recursion/query-cost/sandbox time+mem | all | 📖 |
-| Partial-result honesty | degraded answers flagged degraded in the trace | `trace.py` | 📖 |
+| Partial-result honesty | degraded answers flagged via `hcft.degraded` span attr | `obs/` | 📖 |
 | Retrieval fallback chain | Pinecone → local mirror → widen → BM25 → refuse | RAG retrieve | 📖 |
+
+## I. Tooling (library-first stack, per ground rule)
+
+| Need | Adopted tool |
+|---|---|
+| Run record / trace | OpenInference + OpenTelemetry GenAI semantic conventions |
+| Eval framework + gate | DeepEval (`@observe`, LangGraph CallbackHandler, pytest gate) |
+| RAG metrics | RAGAS |
+| Lexical/semantic metrics | `evaluate` / `torchmetrics` (ROUGE-L, BERTScore) |
+| Custom domain metrics | DeepEval G-Eval |
+| Obs / viz / labeling | LangSmith (OTel ingest) |
+| Input guardrails | Llama Guard / Prompt Guard / NeMo Guardrails / Guardrails AI |
+| Code sandbox | E2B / Docker / RestrictedPython (+ `bandit`, stdlib `ast`) |
+
+Custom code is limited to: the LangGraph agent graphs, thin glue + `hcft.*` attribute
+constants, G-Eval metric definitions, and config (metrics/thresholds per agent).
 
 ---
 
