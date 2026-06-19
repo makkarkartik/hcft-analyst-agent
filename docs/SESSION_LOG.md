@@ -4,6 +4,9 @@
 > after `git pull` (Cursor, Claude Code, web). Captures the project re-scope, the
 > evaluation & safety theory covered, the architecture diagram, and the decisions
 > (locked + open). Last updated: 2026-06-18.
+>
+> **Concept index:** [`CONCEPTS.md`](CONCEPTS.md) — the tracked glossary of every eval /
+> validation / security / observability concept, with build status.
 
 ---
 
