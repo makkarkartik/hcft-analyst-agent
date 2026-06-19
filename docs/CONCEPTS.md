@@ -119,6 +119,19 @@
 | Vertical slice | one agent fully traced+guarded+measured before widening | build strategy | 📖 |
 | HITL `interrupt()` | suspend graph for human approval, resume later | codegen / analysis | 📖 |
 
+## H. Reliability — degradation & fallback
+
+| Concept | One line | Where | Status |
+|---|---|---|---|
+| Degradation ladder | fallback chain ending in a safe refusal, never crash/fabricate | all agents | 📖 |
+| Refuse > fabricate | terminal rule: refuse rather than ship a hallucination | groundedness gate | 📖 |
+| Fail-closed (guards) | a guard that errors denies by default | `guards/` | 📖 |
+| Fail-open (observability) | tracing failure never blocks the user | `obs/` | 📖 |
+| Circuit breaker | trip to fast-fail after repeated dependency failure | retriever / LLM / judge | 📖 |
+| Bounded everything | caps on retries/recursion/query-cost/sandbox time+mem | all | 📖 |
+| Partial-result honesty | degraded answers flagged degraded in the trace | `trace.py` | 📖 |
+| Retrieval fallback chain | Pinecone → local mirror → widen → BM25 → refuse | RAG retrieve | 📖 |
+
 ---
 
 ### How to use this

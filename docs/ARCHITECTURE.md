@@ -119,8 +119,65 @@ proven on real output before everything depends on it.
 
 ---
 
-## 5. Open decisions
+## 5. Per-stage eval × guard × fallback (per agent)
+
+### RAG CHAT
+| Stage | `[E]` eval | `[G]` guard | Fallback / degradation |
+|---|---|---|---|
+| embed query | embed latency | — | embed error → retry → local embed model |
+| retrieve (dense) | hit@k, recall@k | — | Pinecone down → local mirror; 0 hits → widen top_k → BM25 → refuse |
+| chunk injection scan | detector precision/recall | injection | flagged chunk dropped; all flagged → refuse |
+| rerank (BGE) | nDCG@10, MRR, rerank lift | — | reranker error → keep dense order (degraded rank) |
+| grade docs | grader κ vs human | — | grader down → proceed ungraded, mark low-confidence |
+| rewrite (loop) | retries ≤ N, no-collapse | retry cap | max retries → graceful refuse (no infinite loop) |
+| generate | ROUGE/BERT/RAGAS/judge | — | LLM timeout → retry → fallback model; else snippets + "couldn't synthesize" |
+| groundedness gate | faithfulness, citation valid, refusal acc | groundedness, citations | ungrounded → 1 constrained re-gen → else refuse (never ship hallucination) |
+
+### DEEP ANALYSIS
+| Stage | `[E]` eval | `[G]` guard | Fallback / degradation |
+|---|---|---|---|
+| plan / decompose | plan correctness | — | plan fails → single-step fallback |
+| NL→Mongo query | query valid, right-tool | query-safety (read-only, no `$where`) | unsafe/invalid → 1 regen → clarify or refuse |
+| execute aggregation | query latency, result size | cost cap, capability scope | timeout/expensive → partial + warn; empty → "no matching data" |
+| map-reduce synthesis | outcome quality, coverage | — | worker fails → synthesize from rest (flag partial); reduce fails → raw aggregates |
+| groundedness/citation gate | faithfulness | groundedness | ungrounded → numbers-only (no narrative), or refuse |
+
+### CODE-GEN
+| Stage | `[E]` eval | `[G]` guard | Fallback / degradation |
+|---|---|---|---|
+| generate code | AST-pass rate, gen quality | — | gen fails → retry → template |
+| AST allowlist | violation types, pass rate | AST allowlist | violation → 1 stricter regen → refuse ("can't produce safe code") |
+| HITL approval | approval rate / time | HITL gate | reject → regen w/ feedback; timeout → hold (never auto-approve) |
+| sandbox exec | contained?, resource use | sandbox (no net, caps) | runtime error → captured, no side effects; timeout/OOM → kill+report; escape → hard-fail |
+| test-before-commit | tests-passed rate | test gate | fail → return code + failing tests, do NOT freeze; flaky → bounded retry |
+
+---
+
+## 6. Degradation & fallback policy (cross-cutting)
+
+- **Degradation ladder** — every capability has a fallback chain ending in a *safe refusal*,
+  never a crash or a hallucination. Terminal rule: **refuse > fabricate.**
+- **Fail-closed guards, fail-open observability** — guardrails deny by default when they
+  error (block/refuse on safety-critical paths); observability (Langfuse / trace export)
+  must never block the user — if tracing fails, persist locally (Mongo) and proceed.
+- **Circuit breakers** — repeated dependency failure (Pinecone / LLM / judge) trips a
+  breaker → fast-fail to fallback instead of hanging every request.
+- **Bounded everything** — retries, recursion, query cost, sandbox time/memory all capped;
+  the cap's terminal branch is a graceful message.
+- **Partial-result honesty** — degraded answers (dense-only ranking, partial map-reduce,
+  ungraded retrieval) are *flagged degraded* in the trace, not silently passed as full quality.
+
+Chat-graph level: router low-confidence → clarify or default to RAG chat (never silent
+misroute); sub-agent exception → caught, graceful error + trace emitted (no 500); judge
+offline → eval degrades to overlap + programmatic (judge is directional anyway).
+
+---
+
+## 7. Open decisions
 - **Orchestration pattern** — supervisor/router → subgraphs (proposed) vs single ReAct-with-tools
   vs hierarchical delegation. *Recommended: supervisor/router.* Awaiting sign-off.
 - **Trace schema** — the 10-group `AgentRunTrace` (see SESSION_LOG / chat). Awaiting sign-off.
+- **Retrieval fallback chain** — wire the FAISS local mirror as a Pinecone fallback, or just
+  widen-top_k → BM25 → refuse? (FAISS needs the index ported.) To decide at P1.
+- **Fail-open/closed policy** — confirm: guards fail *closed*, observability fails *open*. *(Rec: yes.)*
 - **Router implementation** — LLM classifier vs embedding/rules vs hybrid. To decide at P2.
