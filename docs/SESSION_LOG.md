@@ -7,6 +7,9 @@
 >
 > **Concept index:** [`CONCEPTS.md`](CONCEPTS.md) — the tracked glossary of every eval /
 > validation / security / observability concept, with build status.
+>
+> **Architecture + plan:** [`ARCHITECTURE.md`](ARCHITECTURE.md) — graph topology, per-stage
+> guards/eval, how the chat graph triggers the specialists, and the phased build tracker.
 
 ---
 

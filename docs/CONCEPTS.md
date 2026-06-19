@@ -107,6 +107,18 @@
 | Annotation queue | labeling UI for the anchor slice | Langfuse | 📖 |
 | Cost accounting / latency waterfall | token/$ + timing per run | `trace.py` + Langfuse | 📖 |
 
+## G. Orchestration (LangGraph)
+
+| Concept | One line | Where | Status |
+|---|---|---|---|
+| Supervisor / router | classify intent, dispatch to one specialist subgraph | chat graph | 📖 |
+| Subgraph | a compiled graph used as a node in a parent graph | `agents/` | 📖 |
+| `Command(goto=…)` | node-returned control transfer / dispatch | router | 📖 |
+| `Send` | fan-out to parallel workers (map-reduce) | analysis agent | 📖 |
+| State slice / reducer | per-subgraph state + merge semantics | all graphs | 🔁 |
+| Vertical slice | one agent fully traced+guarded+measured before widening | build strategy | 📖 |
+| HITL `interrupt()` | suspend graph for human approval, resume later | codegen / analysis | 📖 |
+
 ---
 
 ### How to use this
