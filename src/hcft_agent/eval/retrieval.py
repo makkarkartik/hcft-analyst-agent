@@ -100,16 +100,22 @@ def calibrate(testset: Path, limit: int | None) -> None:
             neg.append(max(c.get("rerank_score", 0.0) for c in cands))
     r.close()
 
-    print("\n=== grade-gate calibration (BGE-reranker-v2-m3 raw logits) ===")
+    # NB BGE-reranker-v2-m3 via CrossEncoder applies a sigmoid -> scores are 0..1 probabilities
+    # (NOT raw logits) and saturate near 1.0 for the top candidate.
+    print("\n=== grade-gate calibration (BGE-reranker-v2-m3, sigmoid 0..1) ===")
     for name, xs in [("POS gold-chunk score ", pos), ("NEG top-cand score  ", neg)]:
         if xs:
             print(f"  {name}  n={len(xs):<4} "
-                  f"p10={_pct(xs,.1):+.2f}  p25={_pct(xs,.25):+.2f}  "
-                  f"p50={_pct(xs,.5):+.2f}  p75={_pct(xs,.75):+.2f}  p90={_pct(xs,.9):+.2f}")
+                  f"p10={_pct(xs,.1):.2f}  p25={_pct(xs,.25):.2f}  "
+                  f"p50={_pct(xs,.5):.2f}  p75={_pct(xs,.75):.2f}  p90={_pct(xs,.9):.2f}")
     if pos and neg:
         suggest = (_pct(pos, .5) + _pct(neg, .5)) / 2
-        print(f"\n  >> suggested grade_min_rerank_score ≈ {suggest:+.2f} "
-              f"(midpoint of medians — a starting point, then tune on the refuse/answer trade-off)")
+        overlap = _pct(neg, .9) >= _pct(pos, .1)   # distributions overlap -> weak discriminator
+        print(f"\n  >> midpoint-of-medians = {suggest:.2f}")
+        if overlap:
+            print("  >> WARNING: POS/NEG overlap -- rerank_score saturates, weak answer/refuse "
+                  "gate. Use a LOW floor (catch broken retrieval only); delegate refuse to the "
+                  "output groundedness guard + generator refusal.")
 
 
 def main() -> None:

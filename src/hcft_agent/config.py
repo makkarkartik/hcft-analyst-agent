@@ -49,9 +49,14 @@ class Settings:
 
     # --- RAG chat agent: deterministic gates (no gold at inference) ---
     # grade gate: top reranked candidate must clear this score to be "answerable".
-    # PLACEHOLDER until calibrated empirically from the gold-hit vs non-gold score
-    # distribution (`eval.retrieval --calibrate`). BGE-reranker-v2-m3 emits raw logits.
-    grade_min_rerank_score: float = 0.0
+    # Calibrated 2026-06-19 (`eval.retrieval --calibrate`) -> rerank_score is a WEAK gate, two
+    # reasons: (1) BGE sigmoid scores SATURATE near 1.0 (gold median 1.00 vs unanswerable-top
+    # 0.96, overlap); (2) calibration positives are synthetic QA authored FROM the gold chunk,
+    # so they score ~1.0 while a realistic free-text query's top chunk scores ~0.24 -> a 0.5
+    # floor over-refuses real queries. Decision: CATASTROPHIC-ONLY floor here (reject empty /
+    # garbage retrieval); the real refuse decision belongs to the HHEM output guard + generator
+    # refusal, which see the actual answer-vs-context. (See ARCHITECTURE.md grade-gate note.)
+    grade_min_rerank_score: float = 0.05
     max_rewrites: int = 2               # query-reformulation attempts before refusing
     gen_temperature: float = 0.0        # deterministic generation
 

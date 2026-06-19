@@ -18,6 +18,7 @@ class RagState(TypedDict, total=False):
     context: str             # assembled context string fed to the reader
     answer: str
     retries: int             # rewrite attempts so far
+    relevant: bool           # grade verdict (must be a declared channel or LangGraph drops it)
 
     # --- domain verdicts (-> hcft.* attributes; eval/guards read these) ---
     input_flags: list[str]   # input-ring findings, e.g. ["injection","pii"]
