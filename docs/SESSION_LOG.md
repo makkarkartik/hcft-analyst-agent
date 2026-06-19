@@ -267,5 +267,24 @@ Outcome eval asks "was the answer good?" (fuzzy, needs judge/reference); traject
 asks "did it follow the right procedure?" (structural, deterministic). A right answer via a
 broken trajectory is a latent failure — trajectory asserts catch it before it bites.
 
-**Next:** box 4 (guardrails: input / output / **action**) — or start building the harness
-skeleton (trace schema + gate), where all of this becomes code.
+---
+
+## 9. Box 5 — observability tooling (decision, 2026-06-18)
+
+**Chosen: Langfuse, self-hosted (OSS).** Runs as a docker service next to `hcft-mongo`
+(Postgres-backed); keeps trace data in our control — the data-residency story that mirrors
+Cisco's self-hosted Debugger Studio rationale.
+
+Principle: the platform is the **capture / UI layer, NOT the eval.** We still own the
+Pydantic **trace schema + gate** (the contract the programmatic asserts run on); Langfuse
+adds the span tree, latency/cost waterfall, dataset/eval comparison UI, and the annotation
+queue for labeling the 100-example anchor slice. **Having Langfuse ≠ having evals** —
+measurement validity (gate thresholds, judge-circularity breakers, the human anchor) stays
+our design.
+
+Integration: LangGraph → Langfuse via its callback handler / OTel exporter; our trace
+schema is the source of truth, mirrored to Langfuse for inspection.
+
+**Next:** box 4 (guardrails: input / output / **action** — the code-gen agent's spine) —
+or start building the harness skeleton (trace schema + gate + Langfuse wiring), where all
+of this becomes code.
