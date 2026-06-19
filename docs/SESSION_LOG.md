@@ -214,7 +214,58 @@ spend only on the ~50-slice).
 - Commit to the **~50-example human-anchor slice** (rigorous, JD-core, user's labeling
   effort later) vs. run judge-only (cheaper, but no measured error bound on the judge)?
 
-**Next**
-- **Box 3 — benchmarking:** test-set construction, statistical rigor (sample size, CIs,
-  significance, judge-variance), and the **regression gate**. This is where the anchor
-  slice and the held-out set actually get designed.
+**Locked (box 3, 2026-06-18)**
+- **Benchmark = adopt + extend.** Curated HCFT set (448 grounded / 12 unanswerable) as v1;
+  extend with agent-shaped trajectory/aggregate/refusal cases.
+- **Human-anchor slice = 100 examples, binary** {grounded-correct / not}, stratified incl.
+  hard/ambiguous + unanswerable. Yields each judge config's κ / precision-recall = the
+  judge's measured error rate.
+- **Regression gate = overlap + programmatic-trajectory + safety/refusal as HARD gates;
+  judge DIRECTIONAL-only** (noisy + biased → never hard-blocks).
+
+---
+
+## 8. Box 3 — benchmarking (theory)
+
+**Test set.** Public benchmarks (MMLU/HELM) measure general capability, not HCFT
+faithfulness → need a bespoke held-out set. Hard parts: source-entity split hygiene (no
+leakage), stratification (mirror corpus distribution), refusal-axis coverage (genuinely
+unanswerable cases; current refusal acc 1/12), contamination control (judge never sees the
+gold reference), and agent-shaped cases (routing/aggregate/code-gen, not just single-turn QA).
+
+**Statistical rigor.** A point estimate without an interval isn't a result.
+- Bootstrap per-example scores → CI on the mean (~±0.02–0.03 at n≈460).
+- Paired significance between models (paired bootstrap / Wilcoxon for scores; McNemar for
+  pass/fail) — the paired delta's CI must exclude zero.
+- Judge non-determinism: run the judge N× on a slice, report variance; if variance ≈ the
+  model gap, the judge can't distinguish them. (Why the overlap gap is real and the ~6-pt
+  judge gap is within noise + biased.)
+
+**Regression gate.** Gate on stable signals (deterministic); keep the judge directional.
+Thresholds vs a frozen baseline + noise margin (block if ROUGE-L drops >1 CI below
+baseline; if refusal accuracy regresses; if any trajectory assert fails). Runs in CI on
+every prompt/graph/model change; red blocks merge.
+
+### Programmatic trajectory asserts (the deterministic gate core)
+
+"Trajectory" = the path the agent actually took (nodes/tools fired, order, args, retries,
+retrieved IDs, termination). A *programmatic* assert is plain code reading the structured
+trace and checking an invariant — no LLM, deterministic, cheap → ideal hard gate.
+
+| Property | Assert over the trace | Catches |
+|---|---|---|
+| Grounding precondition | `retrieve` before `generate` | answering with no context |
+| Bounded retries | `retries ≤ MAX_RETRIES` | runaway / expensive loops |
+| No rewriter-collapse | consecutive queries differ | the known M2 bug |
+| Routing correctness | aggregate Q → analysis agent (not RAG) | wrong-agent answers |
+| Citation provenance | `cited_ids ⊆ retrieved_ids` | hallucinated citations |
+| Refusal path | unanswerable Q → terminal node = `refuse` | fabrication on no-answer |
+| Clean termination | hit `END`, not `recursion_limit` | silent runaway |
+| Code-gen safety | generated code passed AST allowlist; ran only in sandbox | unsafe execution |
+
+Outcome eval asks "was the answer good?" (fuzzy, needs judge/reference); trajectory eval
+asks "did it follow the right procedure?" (structural, deterministic). A right answer via a
+broken trajectory is a latent failure — trajectory asserts catch it before it bites.
+
+**Next:** box 4 (guardrails: input / output / **action**) — or start building the harness
+skeleton (trace schema + gate), where all of this becomes code.
