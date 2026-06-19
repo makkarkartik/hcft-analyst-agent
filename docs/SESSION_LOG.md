@@ -285,6 +285,42 @@ our design.
 Integration: LangGraph → Langfuse via its callback handler / OTel exporter; our trace
 schema is the source of truth, mirrored to Langfuse for inspection.
 
-**Next:** box 4 (guardrails: input / output / **action** — the code-gen agent's spine) —
-or start building the harness skeleton (trace schema + gate + Langfuse wiring), where all
-of this becomes code.
+---
+
+## 10. Box 4 — guardrails (theory + decisions, 2026-06-18)
+
+**Reframe:** agentic security ≠ API security. The model is a non-deterministic actor that
+consumes untrusted content AND holds capabilities → the threat is prompt injection steering
+it into misusing legitimately-granted tools (confused deputy). **The retrieved HCFT corpus
+is untrusted input** (indirect injection via a chunk).
+
+Three rings:
+- **Input** (pre-model): injection/jailbreak detection on user input AND retrieved chunks;
+  scope enforcement; PII detection.
+- **Output** (pre-user): groundedness gate (RAGAS-as-guardrail), citation enforcement
+  (`cited_ids ⊆ retrieved_ids`), PII egress/toxicity, schema validation, refuse-not-fabricate.
+- **Action** (agent-specific, code-gen spine): capability scoping (least privilege);
+  NL→query safety (read-only, no `$where`/writes, cost-bounded); AST allowlist; sandboxed
+  subprocess (no net, FS-restricted, mem/CPU/time caps); HITL approval + test-before-commit.
+
+Cross-cutting: **defense in depth** (no single layer trusted) + the **eval/guardrail
+duality** (same check = metric offline, gate online) → guardrail verdicts become trace
+fields (`input_flags`, `output_grounded`, `action_allowed`, `sandbox_result`).
+
+**Decisions (locked):**
+- **Threat model = untrusted everything**, incl. retrieved docs → defend indirect prompt
+  injection (detect on user input AND retrieved chunks).
+- **Build = hybrid:** own the action ring (AST allowlist + sandbox + HITL + test-before-
+  commit), adopt the input ring (Llama Guard / Prompt Guard + a library for injection/PII).
+
+---
+
+## 11. Theory arc COMPLETE → build
+
+All six boxes decided; the harness is fully specified. Build sequence for the skeleton:
+1. **Trace schema** (Pydantic) — the contract everything computes from (the four eval
+   objects, the gate, guardrail verdicts, the Langfuse mirror).
+2. **Gate runner** — overlap + programmatic-trajectory + safety/refusal as hard gates;
+   judge directional-only.
+3. **Langfuse wiring** (self-hosted docker) via callback / OTel exporter.
+4. First agent (**RAG chat**) emitting the trace end-to-end → first real numbers.
