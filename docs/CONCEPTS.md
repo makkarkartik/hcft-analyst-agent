@@ -120,6 +120,15 @@
 | State slice / reducer | per-subgraph state + merge semantics | all graphs | 🔁 |
 | Vertical slice | one agent fully traced+guarded+measured before widening | build strategy | 📖 |
 | HITL `interrupt()` | suspend graph for human approval, resume later | codegen / analysis | 📖 |
+| Skill | bounded capability + manifest (IO·guards·eval·fallback); directly callable | `agents/`/`guards/` | 📖 |
+| Skill manifest | declarative contract: when-to-use, IO, guards, metrics, fallback | per skill | 📖 |
+| Agent (bounded loop) | autonomous loop over skills/tools, iteration-capped | `agents/` | 📖 |
+| Chat agent (front door) | stateful top-level agent; router is its first internal node | `agents/` | 📖 |
+| Skill-vs-agent test | path depends on unknowable intermediate results? no→skill, yes→agent | design rule | 📖 |
+| Tiered routing | cheap classify first (small model/embeddings), escalate only if needed | router node | 📖 |
+| Inline handling | chat agent answers chit-chat/follow-up/reformat without dispatching | chat agent | 📖 |
+| Two doors | conversational (chat agent) + programmatic/MCP (direct skill) | entry | 📖 |
+| Course-correction | re-route/re-decide when a skill rejects or routing is low-confidence | chat agent | 📖 |
 
 ## H. Reliability — degradation & fallback
 

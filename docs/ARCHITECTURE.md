@@ -1,57 +1,94 @@
-# System Architecture — graphs, per-stage guards/eval, implementation plan
+# System Architecture — abstraction model, graphs, per-stage guards/eval, plan
 
-> The **operational** map: the actual graph topology, the guardrail + eval hook at every
-> stage, how the chat graph triggers the specialist agents, and the phased build plan with
-> a live tracker. Companion to `CONCEPTS.md` (the glossary) and `SESSION_LOG.md` (decisions).
-> Orchestration pattern: **supervisor/router → specialist subgraphs** (pending final sign-off).
+> The **operational** map: the abstraction model, the actual graph topology, the guardrail +
+> eval hook at every stage, and the phased build plan with a live tracker. Companion to
+> `CONCEPTS.md` (glossary) and `SESSION_LOG.md` (decisions).
+> Model: **skills-first**; agents are bounded loops over skills; a stateful **chat agent** is
+> the front door (cheap internal router); two doors (chat + MCP). Framework: **LangGraph**.
 
 Legend in diagrams:  `[G]` = guardrail fires here · `[E]` = eval signal captured here.
 
 ---
 
-## 1. Top-level: the CHAT graph (supervisor / router)
+## 0. Abstraction model
 
-```
-                         USER MESSAGE
-                              │
-                              ▼
-        ┌─────────────────────────────────────────────┐
-   [1]  │  INPUT GUARD                                 │  [G] injection · jailbreak · PII · scope
-        │  (on the user message)                       │  [E] input_guard verdicts → trace
-        └─────────────────────────────────────────────┘
-                              │  (blocked → refuse early)
-                              ▼
-        ┌─────────────────────────────────────────────┐
-   [2]  │  ROUTER  — classify intent                   │  [E] route correctness (trajectory)
-        └─────────────────────────────────────────────┘
-              │            │            │            │
-   grounded Q │  analytic/ │  code /    │  out-of-   │
-              │  aggregate │  compute   │  scope     │
-              ▼            ▼            ▼            ▼
-        ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌─────────┐
-   [3]  │ RAG CHAT │ │  DEEP    │ │ CODE-GEN │ │ REFUSE  │
-        │ subgraph │ │ ANALYSIS │ │ subgraph │ │         │
-        └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬────┘
-             └────────────┴────────────┴────────────┘
-                              │  (answer + citations + trace fragment)
-                              ▼
-        ┌─────────────────────────────────────────────┐
-   [4]  │  OUTPUT GUARD                                │  [G] groundedness · citations · PII-egress · schema
-        │  (on the specialist's answer)                │  [E] output_guard verdicts; outcome metrics
-        └─────────────────────────────────────────────┘
-                              │
-                              ▼
-        ┌─────────────────────────────────────────────┐
-   [5]  │  EMIT TRACE → LangSmith + respond to user     │  [E] cost/latency; regression gate (offline)
-        └─────────────────────────────────────────────┘
-```
+Layers, dumb → smart:
+- **Tool** — one function (`retrieve()`, `mongo_aggregate()`, `render_chart()`). No judgment.
+- **Skill** — a bounded capability + a **manifest** (IO schema · guards · eval metrics ·
+  fallback · when-to-use). Fixed control flow; **directly callable**.
+- **Agent** — a **bounded loop over skills/tools** with autonomy (decides, retries,
+  self-corrects). Variable cost → must be capped.
+- **Chat agent** — the stateful, top-level agent (the conversational front door).
 
-Dispatch mechanism: router returns a `Command(goto=<subgraph>)`; each specialist is a
-compiled subgraph with its own state slice. One OpenInference/OTel trace spans the whole run.
+**Skill vs agent test:** *does the path depend on intermediate results it can't know in
+advance?* No → fixed pipeline → **skill**. Yes → observe/decide/loop → **agent**. Agents are
+*made of* skills (a skill is an agent's tool).
+
+| Capability | Skill / agent | Why |
+|---|---|---|
+| Visualize given data | **skill** | fixed transform (data → code → render) |
+| NL → one aggregation | **skill** | steps known |
+| Deep analysis | **agent** | open-ended, iterative investigation |
+| RAG chat (self-correcting) | **agent** | retrieve→grade→rewrite loop |
+| Code-gen w/ test-and-fix | **agent** | generate→check→sandbox→test→fix loop |
+| Single-shot code-gen | skill | one pass |
+
+**Framework = LangGraph** (low-level: explicit nodes/state/cycles), chosen over CrewAI/AutoGen
+because this system's value is *measuring + guarding + controlling* the agent — which needs
+explicit, inspectable control flow, per-stage guard injection, bounded loops, and HITL. An
+opinionated role/task framework would hide exactly what we evaluate and fight the skills model.
 
 ---
 
-## 2. Specialist subgraphs
+## 1. Entry: two doors + the chat agent
+
+**Two front doors, one set of skills:**
+- **Conversational door** — the **chat agent** (stateful LangGraph graph); routing is its
+  *first internal node*, not a stage before it.
+- **Programmatic door** — **direct skill / MCP call** that skips the chat agent entirely (the
+  caller already knows the skill).
+
+```
+USER MSG ─► CHAT AGENT  (LangGraph · owns conversation state)
+              │
+        [1] INPUT GUARD          [G] injection·jailbreak·PII·scope
+              │
+        [2] TRIAGE / ROUTER  (cheap: small model or embeddings)     [E] route correctness
+              │
+   ┌──────────┼─────────────┬───────────────┬─────────────┐
+   ▼          ▼             ▼               ▼             ▼
+ inline    RAG-chat     DEEP-ANALYSIS    CODE-GEN     clarify /
+ (chit-    agent        agent            agent        refuse
+ chat,     (grounded)   (analytic)       (code)       (ambiguous /
+ follow-                                               out-of-scope)
+ up, re-
+ format)
+   │          └─────────────┴───────────────┘
+   │                  │ (answer + citations)
+   └────────┬─────────┘
+            ▼
+       [3] OUTPUT GUARD          [G] groundedness·citations·PII-egress·schema
+            │
+       [4] EMIT TRACE → LangSmith + respond     [E] cost/latency; gate (offline)
+```
+
+**Three rules that keep this cheap and robust:**
+1. **Routing is inside the chat agent**, not before it — the chat agent owns conversation state.
+2. **Not every message dispatches.** Chit-chat / follow-ups / reformat ("now as a chart") are
+   answered *inline* — no skill, no specialist cost. Only genuine new-task intents route out.
+3. **Tiered router** (small model / embeddings); escalate to heavier reasoning only when
+   ambiguous or a skill rejects — **course-correction**: the chat agent re-decides.
+
+Dispatch: router node returns `Command(goto=<skill/agent>)`; each specialist is a compiled
+subgraph. One OpenInference/OTel trace spans the whole run.
+
+---
+
+## 2. Specialist agents (bounded loops over skills)
+
+Each is an **agent** (a capped loop); their tools are **skills** (retrieve, NL→query,
+render-chart, …). "Visualize given data" is a *skill* reused by analysis/code-gen, not its
+own agent.
 
 ### 2a. RAG CHAT
 ```
@@ -106,15 +143,16 @@ Status: `☐ todo` · `◐ in progress` · `☑ done`.
 
 | Phase | Deliverable | Components | Status |
 |---|---|---|---|
-| **P0 Skeleton** | telemetry + eval plumbing | OpenInference instrumentation + OTel→LangSmith, DeepEval+RAGAS gate + G-Eval, `hcft.*` attrs, config, repo restructure | ☐ |
-| **P1 RAG chat** | first agent end-to-end | RAG subgraph + its `[G]`/`[E]` hooks, emits full trace → first real numbers | ☐ |
-| **P2 Chat graph** | orchestration | input guard, router, dispatch (Command), output guard, refuse path | ☐ |
-| **P3 Deep analysis** | analytic agent | NL→Mongo, query-safety guard, map-reduce synthesis | ☐ |
-| **P4 Code-gen** | sandboxed coder | generate → AST allowlist → HITL → sandbox → test-before-commit | ☐ |
+| **P0 Skeleton** | telemetry + eval plumbing | OpenInference instrumentation + OTel→LangSmith, DeepEval+RAGAS gate + G-Eval, `hcft.*` attrs, config, repo restructure | ◐ |
+| **P1 RAG chat** | first agent end-to-end | RAG agent + its `[G]`/`[E]` hooks, emits full trace → first real numbers | ☐ |
+| **P2 Chat agent** | front door | input guard, cheap triage/router, inline handling, dispatch (Command), output guard, refuse | ☐ |
+| **P3 Deep analysis** | analytic agent | NL→Mongo skill, query-safety guard, map-reduce synthesis | ☐ |
+| **P4 Code-gen** | sandboxed coder | generate → AST allowlist → HITL → sandbox → test-before-commit (adopt sandbox tool) | ☐ |
 | **P5 Eval harness** | make it measurable | anchor-slice labeling in LangSmith, benchmark extension (agent-shaped cases), regression gate in CI | ☐ |
+| **P6 Second door** | direct invocation | expose skills via MCP / API (skips the chat agent) | ☐ |
 
 Build principle: **vertical slice first.** P0+P1 get *one* agent fully traced, guarded, and
-measured before widening to the router and the other two specialists — so the contract is
+measured before widening to the chat agent and the other specialists — so the contract is
 proven on real output before everything depends on it.
 
 ---
@@ -167,17 +205,19 @@ proven on real output before everything depends on it.
 - **Partial-result honesty** — degraded answers (dense-only ranking, partial map-reduce,
   ungraded retrieval) are *flagged degraded* in the trace, not silently passed as full quality.
 
-Chat-graph level: router low-confidence → clarify or default to RAG chat (never silent
+Chat-agent level: router low-confidence → clarify or default to RAG chat (never silent
 misroute); sub-agent exception → caught, graceful error + trace emitted (no 500); judge
 offline → eval degrades to overlap + programmatic (judge is directional anyway).
 
 ---
 
-## 7. Open decisions
-- **Orchestration pattern** — ✅ APPROVED 2026-06-19: supervisor/router → specialist subgraphs.
-- **Run record** — ✅ RESOLVED 2026-06-19: OpenInference/OTel spans + DeepEval; no custom
-  `AgentRunTrace` (see SESSION_LOG §12).
-- **Retrieval fallback chain** — wire the FAISS local mirror as a Pinecone fallback, or just
-  widen-top_k → BM25 → refuse? (FAISS needs the index ported.) To decide at P1.
-- **Fail-open/closed policy** — confirm: guards fail *closed*, observability fails *open*. *(Rec: yes.)*
-- **Router implementation** — LLM classifier vs embedding/rules vs hybrid. To decide at P2.
+## 7. Decisions log
+- **Abstraction / orchestration** — ✅ 2026-06-19: skills-first; agents = bounded loops over
+  skills; **chat agent** is the stateful front door with a *cheap internal router* (not a
+  pre-stage); two doors (chat + direct/MCP); tiered routing + course-correction. See §0–§1.
+- **Framework** — ✅ LangGraph (over CrewAI/AutoGen) — explicit control flow for eval/guards.
+- **Run record** — ✅ 2026-06-19: OpenInference/OTel spans + DeepEval; no custom
+  `AgentRunTrace` (SESSION_LOG §12).
+- **Retrieval fallback chain** — FAISS local mirror vs widen-top_k → BM25 → refuse? Decide at P1.
+- **Fail-open/closed policy** — guards fail *closed*, observability fails *open*. *(Rec: yes.)*
+- **Router implementation** — LLM classifier vs embedding/rules vs hybrid. Decide at P2.
