@@ -1,4 +1,4 @@
-# Core graph framework (hand-write all LangGraph code yourself -- see DECISIONS.md)
+# Core graph framework
 langgraph
 langgraph-checkpoint-sqlite
 langgraph-checkpoint-mongodb
@@ -21,3 +21,21 @@ numpy<2
 # Utilities
 python-dotenv
 tqdm
+
+# --- Library-first eval / observability stack (ground rule: adopt, don't hand-roll) ---
+
+# Observability: OpenInference instrumentation -> OTLP -> LangSmith (backend swappable)
+openinference-instrumentation-langchain
+opentelemetry-sdk
+opentelemetry-exporter-otlp
+langsmith
+
+# Evaluation: DeepEval (gate + metrics + G-Eval), RAGAS, lexical/semantic metrics
+deepeval
+ragas
+evaluate
+rouge-score
+bert-score
+
+# Guardrails (input ring) — pin specific models at P2:
+#   Llama Guard / Prompt Guard via `transformers`; nemoguardrails / guardrails-ai TBD

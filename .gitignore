@@ -6,6 +6,7 @@ data/
 *.sqlite
 *.archive.gz
 .pytest_cache/
+*.egg-info/
 
 # Learning artifacts — local only, never part of the project repo
 src/hcft_agent/scratch/

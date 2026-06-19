@@ -1,5 +1,0 @@
-Metadata-Version: 2.4
-Name: hcft-agent
-Version: 0.1.0
-Summary: LangGraph multi-agent analyst over the HCFT healthcare report corpus
-Requires-Python: >=3.11
