@@ -1,65 +1,125 @@
 # HCFT Analyst Agent
 
-A LangGraph multi-agent system over ~6,000 public U.S. healthcare reports (519,555 chunks),
-built as the orchestration + serving layer for a QLoRA fine-tuned Llama-3.2-3B reader from the
-sibling **SLM_Fine_Tuning** (HCFT) project.
+A LangGraph agent system over ~6,000 public U.S. healthcare facility reports (519,555 chunks),
+built as a **learning vehicle for production agent engineering**: LangGraph control flow, the
+four-object evaluation taxonomy, enterprise guardrails, and full OpenTelemetry observability —
+*with the theory behind each decision recorded alongside the code*.
 
-**What it does** (target state):
+It reuses only the **data layer** from the sibling **SLM_Fine_Tuning** (HCFT) project — the
+Pinecone `hcft` vector index + the MongoDB `hcft.chunks` text store — and is otherwise a fresh
+build. The generation ("reader") slot is swappable behind an OpenAI-compatible interface:
+public frontier model now, the QLoRA fine-tuned `raft-3b-r64-v2_2` adapter later, compared in
+the same slot on groundedness, refusal accuracy, latency, and cost.
 
-1. **Grounded Q&A with self-correction** — retrieve (Pinecone + BGE rerank), grade the evidence,
-   rewrite the query and retry on a miss, generate a cited answer, refuse cleanly when the
-   corpus doesn't contain it.
-2. **Analytics questions** a vector index can't answer — routed to an agent that runs MongoDB
-   aggregations over report metadata (counts by state/hospital/year, etc.).
-3. **Multi-report synthesis briefs** — map-reduce summarization across reports, with a
-   human-in-the-loop approval gate before anything is written to disk.
+## Design principle: adopt the standard, own the decision
 
-Threads are persistent (MongoDB checkpointer), responses stream token-by-token, and the
-generation ("reader") slot is swappable behind an OpenAI-compatible interface: public frontier
-model first, the fine-tuned `raft-3b-r64-v2_2` adapter (served via Ollama) later — the headline
-eval compares the two in the same slot on groundedness, refusal accuracy, latency, and cost.
+Every layer that has a mature industry tool **uses that tool** — no hand-rolled equivalents.
+The custom code is the *design*: the graph topology, which metric maps to which step, the
+domain span attributes, and the gate thresholds.
+
+| Concern | Tool adopted | What we own |
+|---|---|---|
+| Observability | OpenInference + OpenTelemetry → **LangSmith** (OTLP) | the `hcft.*` domain span attributes |
+| Component / outcome eval | **DeepEval**, **RAGAS** (faithfulness, answer-relevancy) | which metric binds to which node |
+| Overlap reference metrics | `evaluate` / `torchmetrics` (ROUGE, BERTScore) | gold test-set curation |
+| Custom verdicts (refusal/route) | **DeepEval G-Eval** | the metric definitions + thresholds |
+| Output groundedness guard (live) | **Vectara HHEM-2.1-open** cross-encoder | refuse-vs-answer policy |
+| Input guard (planned) | **Meta Prompt-Guard-86M** | fail-closed policy |
+| Retrieval | Pinecone (dense) + **BGE-reranker-v2-m3** | the eval harness + gate calibration |
+
+Observability **fails open** (no key → the app still runs); guardrails **fail closed**.
+
+## What's built
+
+### RAG chat agent (P1) — `src/hcft_agent/agents/rag_chat.py`
+A self-correcting, fully-instrumented LangGraph state machine. **One span per node**, so each
+step's eval and guard bind to its own span:
+
+```
+input_guard ─(injection?)─► refuse
+     │
+  retrieve ─► grade ─(relevant?)─► generate ─► output_guard ─(grounded?)─► END
+     ▲              │                                          │
+     │         (weak, retries<N)                          (ungrounded)
+     └── rewrite ◄──┤                                          ▼
+                 (exhausted) ───────────────────────────────► refuse
+```
+
+- **Deterministic gates** (no gold at inference): grade = rerank-score threshold (calibrated
+  from data, not guessed); retry cap = N rewrites then refuse.
+- **Inline groundedness guard** (HHEM) on the output ring only — *refuse > fabricate*. All
+  LLM-judge evaluation (RAGAS / DeepEval / G-Eval) runs **offline**, never in the hot path.
+
+### Retrieval-quality baseline — `src/hcft_agent/eval/retrieval.py`
+Standalone, deterministic harness judged off the gold `source_chunk_id` (no LLM, no
+reranker-as-oracle → **no circularity**). Over 448 grounded questions:
+
+| Metric | Pre-rerank | Post-rerank |
+|---|---|---|
+| recall@50 | **0.906** | — |
+| hit@1 | 0.531 | **0.674** |
+| hit@5 (context window) | 0.752 | **0.862** |
+| MRR | 0.633 | **0.760** |
+
+Headline **hit@5 POST-rerank = 0.862**. The read: retrieval leverage is upstream (9.4%
+retriever miss) not the reranker (4.4% rerank miss). `--calibrate` dumps the gold-hit vs
+unanswerable score distributions to set the grade-gate threshold empirically.
+
+### Telemetry — `src/hcft_agent/obs/`
+`telemetry.py` wires OpenInference + OTel → LangSmith over OTLP (vendor-neutral; swap the
+endpoint for Phoenix/Langfuse by env var). `attributes.py` defines the `hcft.*` namespace
+(route, refusal, grounded, degraded, guard verdicts) the eval and guards read off the trace.
 
 ## Status
 
-- [x] Local MongoDB (Docker) + chunk migration — **519,555 docs** in `hcft.chunks`, indexed for
-      retrieval hydration (`_id` = chunk_id) and analytics (`state+hospital+year`, `document_type`, `split`)
-- [ ] M0 hello graph (state, reducers, conditional edge)
-- [ ] M1 ReAct loop from scratch + retriever tool
-- [ ] M2 self-corrective RAG subgraph
-- [ ] M3 persistence (Sqlite → Mongo checkpointer), interrupts, time travel
-- [ ] M4 supervisor multi-agent + Send map-reduce
-- [ ] M5 streaming + observability
-- [ ] M6 eval + hardening
-- [ ] raft-3b reader swap (merge → GGUF → Ollama) + comparison eval
+- [x] Telemetry: OpenInference/OTel → LangSmith (verified end-to-end)
+- [x] Retrieval-quality harness + first real numbers (448 q; hit@5 post 0.862)
+- [x] **P1 RAG chat agent** — span-per-node, deterministic gates, HHEM output guard
+- [ ] Grade-gate threshold calibration (`eval.retrieval --calibrate`)
+- [ ] Eval wiring: DeepEval + RAGAS + G-Eval custom metrics + pytest gate
+- [ ] Input ring upgrade: heuristic → Prompt-Guard-86M
+- [ ] P3 deep-analysis agent (MongoDB aggregation + map-reduce synthesis)
+- [ ] P4 code-gen agent (sandboxed: AST allowlist + subprocess + HITL)
+- [ ] raft-3b reader swap (merge → GGUF → Ollama) + same-slot comparison eval
 
 ## Repository layout
 
-- `src/hcft_agent/` — the system: `config.py` (settings + swappable model slots),
-  `graphs/` (the production LangGraph graphs — research / analytics / synthesis / supervisor),
-  and the tools they use.
-- `scripts/` — one-shot data plumbing (Mongo migration, verification).
+- `src/hcft_agent/`
+  - `agents/` — the LangGraph agents (`rag_chat.py`, `state.py`)
+  - `guards/` — `input_ring.py` (injection/PII), `groundedness.py` (HHEM output ring)
+  - `obs/` — `telemetry.py` (OTel→LangSmith), `attributes.py` (`hcft.*` keys)
+  - `eval/` — `retrieval.py` (deterministic retrieval harness + gate calibration)
+  - `retriever.py` (dense + rerank), `generate.py` (grounded reader), `config.py` (settings)
+- `docs/`
+  - [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) — graph topology, per-stage eval×guard×fallback, build plan
+  - [`SESSION_LOG.md`](docs/SESSION_LOG.md) — the design record + measured results
+  - [`CONCEPTS.md`](docs/CONCEPTS.md) — tracked glossary of every eval/safety/obs concept
+  - [`pipeline_map.html`](docs/pipeline_map.html) — living step × evaluation × guardrail map (open in a browser)
 
 ## Stack
 
 | Component | Choice | Notes |
 |---|---|---|
-| Orchestration | LangGraph | all graph code hand-written (see `DECISIONS.md`) |
-| Vectors | Pinecone `hcft` (768-dim, cosine) | reused from HCFT stage 02c; vectors only, no text |
+| Orchestration | LangGraph | explicit control flow; per-node spans for eval/guard binding |
+| Observability | OpenInference + OTel → LangSmith | OTLP ingest, vendor-neutral |
+| Vectors | Pinecone `hcft` (768-dim, cosine) | reused from HCFT; vectors only, no text |
 | Rerank | BAAI/bge-reranker-v2-m3 | reused from HCFT stage 06 |
-| Text + metadata + checkpoints | MongoDB 7 (Docker, `hcft-mongo` :27017) | replaces HCFT's sqlite text store in this repo |
-| Reader (phase 1) | public model via OpenAI-compatible API | Fireworks / gpt-4o-mini |
+| Text + metadata | MongoDB 7 (Docker, `hcft-mongo` :27017) | replaces HCFT's sqlite text store |
+| Groundedness guard | Vectara HHEM-2.1-open | live faithfulness proxy (~tens of ms, deterministic) |
+| Reader (phase 1) | public model via OpenAI-compatible API | gpt-4o-mini / Fireworks |
 | Reader (phase 2) | `raft-3b-r64-v2_2` merged + GGUF via Ollama | see lineage note below |
 
 ## Quickstart
 
 ```powershell
-docker compose up -d                                  # MongoDB on 127.0.0.1:27017
-.venv\Scripts\python.exe scripts\migrate_chunks.py --drop   # load chunks from ../SLM_Fine_Tuning
-.venv\Scripts\python.exe scripts\verify_mongo.py            # sanity checks
+docker compose up -d                                          # MongoDB on 127.0.0.1:27017
+pip install -e .                                              # editable install
+python -m hcft_agent.eval.retrieval --limit 50                # retrieval sanity pass
+python -m hcft_agent.agents.rag_chat "What infection control deficiencies were cited?"
 ```
 
-Requires the sibling `SLM_Fine_Tuning` repo for `data/chunks/*.jsonl` (migration source) and
-Pinecone credentials in `.env` for live retrieval.
+Requires Pinecone credentials + a reader API key in `.env` (gitignored), and the chunk data
+loaded into Mongo from the sibling `SLM_Fine_Tuning` repo.
 
 ## Reader model lineage (read before serving the fine-tune)
 
@@ -82,9 +142,9 @@ rank ≥ 16** (`use_rslora = bool(cfg.lora.use_rslora and rank >= 16)`). Consequ
 
 ## Relationship to the HCFT (SLM_Fine_Tuning) project
 
-This repo executes the "LangGraph graph" item from HCFT's designed-not-built Phase-2 list and
-implements HCFT's designed fix for its known model-level refusal weakness (an **external
-retrieval-confidence gate** — the document-grading and groundedness nodes here). Serving via
-Ollama is a deliberate divergence from the original vLLM LoRA hot-load plan: vLLM doesn't run
-natively on Windows, and the architecturally relevant property (OpenAI-compatible boundary in
-front of the fine-tune) is preserved. vLLM remains architected/cost-modeled, not operated.
+This repo implements HCFT's designed fix for its known model-level refusal weakness — an
+**external retrieval-confidence gate** (the grade + groundedness nodes here) — and the
+designed-not-built "LangGraph graph" Phase-2 item. Serving via Ollama is a deliberate
+divergence from the original vLLM LoRA hot-load plan (vLLM doesn't run natively on Windows);
+the architecturally relevant property — an OpenAI-compatible boundary in front of the
+fine-tune — is preserved. vLLM remains architected/cost-modeled, not operated.

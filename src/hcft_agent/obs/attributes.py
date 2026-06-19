@@ -21,6 +21,7 @@ TERMINAL = f"{NS}.terminal"               # "answer" | "refuse" | "error"
 # --- grounding / outcome ---
 IS_REFUSAL = f"{NS}.is_refusal"
 GROUNDED = f"{NS}.grounded"
+GROUNDED_SCORE = f"{NS}.grounded_score"   # HHEM P(grounded), the live faithfulness proxy
 CITED_IDS = f"{NS}.cited_ids"
 RETRIEVED_IDS = f"{NS}.retrieved_ids"
 

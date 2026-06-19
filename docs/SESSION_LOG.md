@@ -362,3 +362,36 @@ integration · LangSmith OpenTelemetry support.
 3. **Eval wiring**: DeepEval CallbackHandler + RAGAS + G-Eval custom metrics + threshold
    config (the gate).
 4. First agent (**RAG chat**) instrumented end-to-end → first real numbers.
+
+---
+
+## 13. Retrieval-quality baseline (measured 2026-06-19)
+
+First real numbers. Standalone deterministic harness — `python -m hcft_agent.eval.retrieval`
+— judged off gold `source_chunk_id` (no LLM, no reranker-as-oracle → **no circularity**).
+448 grounded questions from `qa_v2/test.jsonl` (12 unanswerable/distractor rows excluded).
+`candidates()` returns all `dense_top_k=50` candidates with both dense + rerank scores;
+gold rank read at the dense (pre-rerank) and BGE (post-rerank) stages from one call.
+
+| Metric | Pre-rerank | Post-rerank | Δ (reranker lift) |
+|---|---|---|---|
+| recall@50 | **0.906** | — | — |
+| hit@1 | 0.531 | **0.674** | +0.143 |
+| hit@5 (context window) | 0.752 | **0.862** | +0.109 |
+| MRR | 0.633 | **0.760** | +0.127 |
+
+**RAG-critical = hit@5 POST-rerank = 0.862** (gold in the generator's context window).
+
+**Read:** two distinct failure buckets needing different fixes —
+- **Retriever miss 9.4%** (`1−recall@50`): gold never reaches the pool; a dense blind spot
+  no reranker can fix. This is the hard ceiling. Leverage = **hybrid BM25+RRF** (deferred A/B)
+  or query rewrite.
+- **Rerank miss 4.4%** (`recall − hit@5_post`): gold in pool but missed the top-5. Small.
+  The reranker captures **95%** of retrievable gold (0.862/0.906) into the window — near-optimal.
+
+→ Conclusion: retrieval leverage is upstream (retriever), not the reranker. Justifies the
+hybrid A/B; de-prioritizes a fancier reranker.
+
+**Caveat:** slightly exceeds the canonical resume figures (hit@1 0.66 / hit@5 0.84 /
+MRR 0.74) — different split (predates qa_v2 curation). Resume numbers stay the cited FT
+result; these are the agent project's own substrate.

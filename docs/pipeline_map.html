@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HCFT Agent — Pipeline Map (steps × eval × guards)</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --ink: #e6edf3; --muted: #8b949e;
+    --blue: #2f81f7; --blue-bg: #0d2540; --blue-bd: #1f6feb;
+    --green: #3fb950; --green-bg: #0f2a17; --green-bd: #238636;
+    --red: #f85149; --red-bg: #2d1416; --red-bd: #b62324;
+    --row-bd: #21262d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px 32px 60px;
+    background: var(--bg); color: var(--ink);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 22px; font-size: 13px; }
+
+  /* ---------- legend ---------- */
+  .legend {
+    display: flex; gap: 22px; flex-wrap: wrap; align-items: center;
+    background: var(--panel); border: 1px solid var(--row-bd); border-radius: 10px;
+    padding: 12px 16px; margin-bottom: 26px; font-size: 12.5px; color: var(--muted);
+  }
+  .legend b { color: var(--ink); }
+  .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px;
+            vertical-align: -1px; margin-right: 6px; }
+  .sw-blue { background: var(--blue-bd); } .sw-green { background: var(--green-bd); }
+  .sw-red { background: var(--red-bd); }
+
+  /* ---------- subprocess container ---------- */
+  .subprocess {
+    background: var(--panel); border: 1px solid var(--row-bd); border-radius: 12px;
+    padding: 0 0 14px; margin-bottom: 26px; overflow: hidden;
+  }
+  .sp-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 18px; font-weight: 600; font-size: 14px;
+    background: linear-gradient(90deg, var(--blue-bg), transparent);
+    border-bottom: 1px solid var(--row-bd); border-left: 4px solid var(--blue-bd);
+  }
+  .sp-head .tag { color: var(--muted); font-weight: 400; font-size: 12px; }
+
+  /* column headers */
+  .grid-head, .row {
+    display: grid;
+    grid-template-columns: 300px 360px 360px;
+    gap: 16px; padding: 0 18px;
+  }
+  .grid-head { margin: 12px 0 6px; }
+  .grid-head div {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); padding-bottom: 4px; border-bottom: 1px dashed var(--row-bd);
+  }
+
+  /* a row == one step, with its eval + guard aligned on the SAME grid line */
+  .row { padding-top: 12px; padding-bottom: 12px; align-items: stretch; }
+  .row + .row { border-top: 1px solid var(--row-bd); }
+
+  .cell { border-radius: 9px; padding: 10px 12px; position: relative; }
+  .cell .t { font-weight: 600; font-size: 13px; }
+  .cell .d { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .cell .live { display: block; margin-top: 5px; font-size: 11.5px; font-style: italic;
+                color: #c9d1d9; opacity: .85; }
+  .empty { background: transparent; }
+
+  .step  { background: var(--blue-bg);  border: 1px solid var(--blue-bd); }
+  .eval  { background: var(--green-bg); border: 1px solid var(--green-bd); }
+  .guard { background: var(--red-bg);   border: 1px solid var(--red-bd); }
+
+  /* vertical control-flow connector under each step (except last) */
+  .step.flow::after {
+    content: "↓"; position: absolute; left: 50%; bottom: -16px;
+    transform: translateX(-50%); color: var(--blue); font-size: 14px; z-index: 2;
+  }
+
+  .pill { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; margin-left: 8px;
+          border: 1px solid currentColor; }
+  .pill.green { color: var(--green); } .pill.red { color: var(--red); }
+  .planned { opacity: .6; }
+  .foot { color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+  <h1>HCFT Agent — Pipeline Map</h1>
+  <p class="sub">Each subprocess (left) is mapped row-by-row to its <b>evaluation</b> (middle) and <b>guardrails</b> (right).
+     A step, its eval, and its guard share one row. Grows downward as we build.</p>
+
+  <div class="legend">
+    <span><span class="swatch sw-blue"></span><b>Steps</b> — control flow (↓)</span>
+    <span><span class="swatch sw-green"></span><b>Evaluation</b> — offline metric &nbsp;·&nbsp; <i>italic = live/in-flight approximation</i></span>
+    <span><span class="swatch sw-red"></span><b>Guardrails</b> — aligned to the step they protect</span>
+    <span><span class="pill green">live</span> runs at inference &nbsp; <span class="pill red planned">planned</span> not yet built</span>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- SUBPROCESS 1: RETRIEVAL                                       -->
+  <!-- ============================================================ -->
+  <section class="subprocess">
+    <div class="sp-head">🔵 RETRIEVAL <span class="tag">— dense (Pinecone) → hydrate (Mongo) → cross-encoder rerank → context window</span></div>
+
+    <div class="grid-head">
+      <div>Step</div><div>Evaluation (offline ⇄ live)</div><div>Guardrail</div>
+    </div>
+
+    <!-- query -->
+    <div class="row">
+      <div class="cell step flow"><div class="t">query</div><div class="d">user question (raw)</div></div>
+      <div class="cell empty"></div>
+      <div class="cell guard"><div class="t">input ring <span class="pill red planned">planned</span></div>
+        <div class="d">injection / PII heuristic scan on the query before it enters the graph</div></div>
+    </div>
+
+    <!-- embed -->
+    <div class="row">
+      <div class="cell step flow"><div class="t">embed_query</div>
+        <div class="d">Qwen3-Embedding-4B · 768-dim · instruction on query side</div></div>
+      <div class="cell empty"></div>
+      <div class="cell empty"></div>
+    </div>
+
+    <!-- dense -->
+    <div class="row">
+      <div class="cell step flow"><div class="t">dense search</div>
+        <div class="d">Pinecone <code>hcft</code> · cosine · top-50</div></div>
+      <div class="cell eval"><div class="t">recall@50 = 0.906</div>
+        <div class="d">did gold reach the candidate pool — the hard ceiling on RAG quality</div>
+        <span class="live">live: no gold at inference; pool size is the only knob</span></div>
+      <div class="cell empty"></div>
+    </div>
+
+    <!-- hydrate -->
+    <div class="row">
+      <div class="cell step flow"><div class="t">hydrate text</div>
+        <div class="d">Mongo <code>hcft.chunks</code> — chunk text + metadata by id</div></div>
+      <div class="cell empty"></div>
+      <div class="cell empty"></div>
+    </div>
+
+    <!-- rerank -->
+    <div class="row">
+      <div class="cell step flow"><div class="t">rerank</div>
+        <div class="d">BGE-reranker-v2-m3 cross-encoder · re-scores all 50</div></div>
+      <div class="cell eval"><div class="t">hit@1 .53→.67 · hit@5 .75→.86 · MRR .63→.76</div>
+        <div class="d">post-rerank gold in the top-k window — reranker lift +0.11 on hit@5</div>
+        <span class="live">live approx: rerank_score threshold (the grade gate) + rerank ordering</span></div>
+      <div class="cell empty"></div>
+    </div>
+
+    <!-- window -->
+    <div class="row">
+      <div class="cell step"><div class="t">window → context</div>
+        <div class="d">top-k = 5 chunks assembled into the generator's context</div></div>
+      <div class="cell empty"></div>
+      <div class="cell guard"><div class="t">indirect-injection scan <span class="pill red planned">planned</span></div>
+        <div class="d">retrieved chunks are untrusted input — scan for poisoned instructions before they reach the LLM</div></div>
+    </div>
+
+    <p class="foot" style="padding:0 18px;">Headline: <b>hit@5 POST-rerank = 0.862</b> (gold in the generator's window) · 448 grounded questions · judged off gold <code>source_chunk_id</code> (no LLM, no circularity).</p>
+  </section>
+
+  <!-- Next subprocess (GENERATION: grade → generate → output guard) appended here as P1 lands. -->
+
+</body>
+</html>

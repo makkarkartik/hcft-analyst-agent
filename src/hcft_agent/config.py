@@ -47,5 +47,18 @@ class Settings:
     context_top_k: int = 5              # concatenated into the LLM prompt
     context_char_cap: int = 1800        # per-chunk char cap when assembling context
 
+    # --- RAG chat agent: deterministic gates (no gold at inference) ---
+    # grade gate: top reranked candidate must clear this score to be "answerable".
+    # PLACEHOLDER until calibrated empirically from the gold-hit vs non-gold score
+    # distribution (`eval.retrieval --calibrate`). BGE-reranker-v2-m3 emits raw logits.
+    grade_min_rerank_score: float = 0.0
+    max_rewrites: int = 2               # query-reformulation attempts before refusing
+    gen_temperature: float = 0.0        # deterministic generation
+
+    # --- output groundedness guard (inline, fast, deterministic) ---
+    # Vectara HHEM-2.1-open cross-encoder: P(answer is grounded in context), 0..1.
+    hhem_model: str = "vectara/hallucination_evaluation_model"
+    grounded_min_score: float = 0.5     # below -> refuse rather than risk fabrication
+
 
 settings = Settings()

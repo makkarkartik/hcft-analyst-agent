@@ -85,11 +85,14 @@ class Retriever:
         return out
 
     # ---- core retrieval ----
-    def retrieve(self, question: str, rerank: bool = True) -> list[dict]:
+    def _rank(self, question: str, rerank: bool = True) -> list[dict]:
+        """Full candidate list in DENSE order (Pinecone score desc), hydrated, with a
+        ``rerank_score`` added per candidate when ``rerank`` is set. NOT truncated — the
+        caller decides. Shared by :meth:`retrieve` (pipeline) and :meth:`candidates` (eval)."""
         vec = self.embed_query(question)
-        index = self._get_index()
-        res = index.query(vector=vec.tolist(), top_k=settings.dense_top_k, include_metadata=True)
-
+        res = self._get_index().query(
+            vector=vec.tolist(), top_k=settings.dense_top_k, include_metadata=True
+        )
         ids, dense = [], {}
         for m in res.get("matches", []):
             ids.append(m["id"])
@@ -111,13 +114,25 @@ class Retriever:
             })
 
         if rerank and cands:
-            reranker = self._get_reranker()
-            scores = reranker.predict([(question, c["text"]) for c in cands], show_progress_bar=False)
+            scores = self._get_reranker().predict(
+                [(question, c["text"]) for c in cands], show_progress_bar=False
+            )
             for c, s in zip(cands, scores):
                 c["rerank_score"] = float(s)
-            cands.sort(key=lambda c: c["rerank_score"], reverse=True)
+        return cands
 
+    def retrieve(self, question: str, rerank: bool = True) -> list[dict]:
+        """Pipeline retrieval: reranked (when enabled) and truncated to ``final_top_k``."""
+        cands = self._rank(question, rerank=rerank)
+        if rerank and cands and "rerank_score" in cands[0]:
+            cands = sorted(cands, key=lambda c: c["rerank_score"], reverse=True)
         return cands[: settings.final_top_k]
+
+    def candidates(self, question: str) -> list[dict]:
+        """Eval hook: ALL ``dense_top_k`` candidates in dense order, each carrying
+        ``dense_score`` and ``rerank_score`` — so retrieval metrics can be measured at both
+        the dense (pre-rerank) and reranked stages from a single call."""
+        return self._rank(question, rerank=True)
 
     # ---- assemble the context string fed to the LLM ----
     def build_context(self, hits: list[dict]) -> str:
