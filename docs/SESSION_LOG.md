@@ -275,21 +275,25 @@ broken trajectory is a latent failure — trajectory asserts catch it before it 
 
 ---
 
-## 9. Box 5 — observability tooling (decision, 2026-06-18)
+## 9. Box 5 — observability tooling (decision 2026-06-18; **revised 2026-06-19 → LangSmith**)
 
-**Chosen: Langfuse, self-hosted (OSS).** Runs as a docker service next to `hcft-mongo`
-(Postgres-backed); keeps trace data in our control — the data-residency story that mirrors
-Cisco's self-hosted Debugger Studio rationale.
+**Chosen: LangSmith (hosted SaaS, paid).** Revised from Langfuse — user wants hands-on
+experience with the reference tool and is paying for it. Tightest LangGraph integration
+(automatic tracing via env vars, no infra to run); HCFT is public data so cloud egress is a
+non-issue. The self-host-vs-hosted judgment remains the interview nuance: you'd reach for
+self-hosted (Langfuse) under a data-residency constraint — exactly why Cisco built the
+self-hosted Debugger Studio.
 
-Principle: the platform is the **capture / UI layer, NOT the eval.** We still own the
-Pydantic **trace schema + gate** (the contract the programmatic asserts run on); Langfuse
-adds the span tree, latency/cost waterfall, dataset/eval comparison UI, and the annotation
-queue for labeling the 100-example anchor slice. **Having Langfuse ≠ having evals** —
-measurement validity (gate thresholds, judge-circularity breakers, the human anchor) stays
-our design.
+Principle (vendor-independent): the platform is the **capture / UI layer, NOT the eval.** We
+still own the Pydantic **trace schema + gate** (the contract the programmatic asserts run
+on); LangSmith adds the span tree, latency/cost waterfall, dataset/eval comparison UI, and
+the annotation queue for labeling the 100-example anchor slice. **Having LangSmith ≠ having
+evals** — measurement validity (gate thresholds, judge-circularity breakers, the human
+anchor) stays our design.
 
-Integration: LangGraph → Langfuse via its callback handler / OTel exporter; our trace
-schema is the source of truth, mirrored to Langfuse for inspection.
+Integration: set `LANGCHAIN_TRACING_V2=true` + `LANGCHAIN_API_KEY` + `LANGCHAIN_PROJECT`;
+LangGraph traces automatically. Our trace schema stays the source of truth, mirrored to
+LangSmith for inspection.
 
 ---
 
@@ -325,8 +329,8 @@ fields (`input_flags`, `output_grounded`, `action_allowed`, `sandbox_result`).
 
 All six boxes decided; the harness is fully specified. Build sequence for the skeleton:
 1. **Trace schema** (Pydantic) — the contract everything computes from (the four eval
-   objects, the gate, guardrail verdicts, the Langfuse mirror).
+   objects, the gate, guardrail verdicts, the LangSmith mirror).
 2. **Gate runner** — overlap + programmatic-trajectory + safety/refusal as hard gates;
    judge directional-only.
-3. **Langfuse wiring** (self-hosted docker) via callback / OTel exporter.
+3. **LangSmith wiring** (env vars) — automatic LangGraph tracing.
 4. First agent (**RAG chat**) emitting the trace end-to-end → first real numbers.

@@ -102,10 +102,11 @@
 |---|---|---|---|
 | Tracing / spans | per-step capture of inputs/outputs/latency/cost | `obs/` | 📖 |
 | Structured trace schema | the Pydantic contract everything computes from | `trace.py` | 🔨 next |
-| Langfuse (self-hosted) | OSS observability + datasets + annotation, in-our-infra | `obs/` + docker | 📖 |
+| LangSmith (hosted) | reference LangGraph observability + datasets + annotation queues | `obs/` (env vars) | 📖 |
+| Langfuse (self-host alt) | OSS equivalent; the choice under a data-residency constraint | (documented alternative) | 📖 |
 | OpenTelemetry / OTel GenAI | vendor-neutral tracing standard | `obs/` exporter | 📖 |
-| Annotation queue | labeling UI for the anchor slice | Langfuse | 📖 |
-| Cost accounting / latency waterfall | token/$ + timing per run | `trace.py` + Langfuse | 📖 |
+| Annotation queue | labeling UI for the anchor slice | LangSmith | 📖 |
+| Cost accounting / latency waterfall | token/$ + timing per run | `trace.py` + LangSmith | 📖 |
 
 ## G. Orchestration (LangGraph)
 

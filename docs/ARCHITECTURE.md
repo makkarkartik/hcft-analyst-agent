@@ -42,7 +42,7 @@ Legend in diagrams:  `[G]` = guardrail fires here · `[E]` = eval signal capture
                               │
                               ▼
         ┌─────────────────────────────────────────────┐
-   [5]  │  EMIT TRACE → Langfuse + respond to user      │  [E] cost/latency; regression gate (offline)
+   [5]  │  EMIT TRACE → LangSmith + respond to user     │  [E] cost/latency; regression gate (offline)
         └─────────────────────────────────────────────┘
 ```
 
@@ -106,12 +106,12 @@ Status: `☐ todo` · `◐ in progress` · `☑ done`.
 
 | Phase | Deliverable | Components | Status |
 |---|---|---|---|
-| **P0 Skeleton** | the contract + plumbing | `trace.py` (AgentRunTrace), gate runner, Langfuse docker + wiring, repo restructure | ☐ |
+| **P0 Skeleton** | the contract + plumbing | `trace.py` (AgentRunTrace), gate runner, LangSmith wiring (env vars), repo restructure | ☐ |
 | **P1 RAG chat** | first agent end-to-end | RAG subgraph + its `[G]`/`[E]` hooks, emits full trace → first real numbers | ☐ |
 | **P2 Chat graph** | orchestration | input guard, router, dispatch (Command), output guard, refuse path | ☐ |
 | **P3 Deep analysis** | analytic agent | NL→Mongo, query-safety guard, map-reduce synthesis | ☐ |
 | **P4 Code-gen** | sandboxed coder | generate → AST allowlist → HITL → sandbox → test-before-commit | ☐ |
-| **P5 Eval harness** | make it measurable | anchor-slice labeling in Langfuse, benchmark extension (agent-shaped cases), regression gate in CI | ☐ |
+| **P5 Eval harness** | make it measurable | anchor-slice labeling in LangSmith, benchmark extension (agent-shaped cases), regression gate in CI | ☐ |
 
 Build principle: **vertical slice first.** P0+P1 get *one* agent fully traced, guarded, and
 measured before widening to the router and the other two specialists — so the contract is
@@ -158,7 +158,7 @@ proven on real output before everything depends on it.
 - **Degradation ladder** — every capability has a fallback chain ending in a *safe refusal*,
   never a crash or a hallucination. Terminal rule: **refuse > fabricate.**
 - **Fail-closed guards, fail-open observability** — guardrails deny by default when they
-  error (block/refuse on safety-critical paths); observability (Langfuse / trace export)
+  error (block/refuse on safety-critical paths); observability (LangSmith / trace export)
   must never block the user — if tracing fails, persist locally (Mongo) and proceed.
 - **Circuit breakers** — repeated dependency failure (Pinecone / LLM / judge) trips a
   breaker → fast-fail to fallback instead of hanging every request.
