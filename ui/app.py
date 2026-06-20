@@ -10,6 +10,7 @@ code path. Run:  ``streamlit run ui/app.py``
 from __future__ import annotations
 
 import html
+import time
 
 import streamlit as st
 
@@ -217,8 +218,20 @@ if go and q.strip():
 
     # 4. streamed generation (st.write_stream — the standard incremental primitive) -------
     st.markdown("<div class='stage'>Generation · streamed</div>", unsafe_allow_html=True)
+    _gt: dict = {}
+
+    def _timed(it):
+        t0 = time.perf_counter()
+        for i, d in enumerate(it):
+            if i == 0:
+                _gt["ttft"] = time.perf_counter() - t0   # time to FIRST token
+            yield d
+        _gt["total"] = time.perf_counter() - t0
+
     with st.container(border=True):
-        acc = st.write_stream(gen.stream(q, window))
+        acc = st.write_stream(_timed(gen.stream(q, window)))
+    if _gt:
+        st.caption(f"⏱ TTFT {_gt.get('ttft', 0):.2f}s · full generation {_gt.get('total', 0):.2f}s")
 
     # 5. output groundedness guard ---------------------------------------
     context, _, id_by_num = gen.build_context(q, window)
