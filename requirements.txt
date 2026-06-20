@@ -24,10 +24,10 @@ tqdm
 
 # --- Library-first eval / observability stack (ground rule: adopt, don't hand-roll) ---
 
-# Observability: OpenInference instrumentation -> OTLP -> LangSmith (backend swappable)
-openinference-instrumentation-langchain
-opentelemetry-sdk
-opentelemetry-exporter-otlp
+# Observability: native LangSmith tracing (LANGSMITH_TRACING). Dropped the OTel/OpenInference
+# OTLP path — LangGraph's worker threads broke OTel's thread-local span context (spans orphaned
+# into separate root traces); LangChain's native tracer nests across those threads. See
+# docs/SESSION_LOG.md 9a.
 langsmith
 
 # Evaluation: DeepEval (gate + metrics + G-Eval), RAGAS, lexical/semantic metrics

@@ -182,6 +182,17 @@ def build_app():
     return g.compile()
 
 
+def warmup() -> None:
+    """Fire one throwaway pass so the embedder/reranker CUDA kernels + Pinecone TLS are hot.
+    Cold first-call JIT is ~25s; warm is ~0.5s. Call at server/eval startup so the cold cost
+    lands here, not on a user's first real query. The UI does the equivalent in its loaders."""
+    try:
+        _retriever().retrieve("warmup")
+        _guard().is_grounded("warmup context", "warmup answer")
+    except Exception:
+        pass
+
+
 def answer(question: str) -> RagState:
     """Convenience entry: run the graph end-to-end for one question."""
     return build_app().invoke({"question": question})
