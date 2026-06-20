@@ -2,7 +2,7 @@
 
 A LangGraph agent system over ~6,000 public U.S. healthcare facility reports (519,555 chunks),
 built as a **learning vehicle for production agent engineering**: LangGraph control flow, the
-four-object evaluation taxonomy, enterprise guardrails, and full OpenTelemetry observability —
+four-object evaluation taxonomy, enterprise guardrails, and full LangSmith tracing —
 *with the theory behind each decision recorded alongside the code*.
 
 It reuses only the **data layer** from the sibling **SLM_Fine_Tuning** (HCFT) project — the
@@ -10,6 +10,16 @@ Pinecone `hcft` vector index + the MongoDB `hcft.chunks` text store — and is o
 build. The generation ("reader") slot is swappable behind an OpenAI-compatible interface:
 public frontier model now, the QLoRA fine-tuned `raft-3b-r64-v2_2` adapter later, compared in
 the same slot on groundedness, refusal accuracy, latency, and cost.
+
+## Pipeline map — every step × its evaluation × its guardrail
+
+![HCFT Agent pipeline map: each pipeline step mapped to its evaluation metric and its guardrail, across the Retrieval and Generation subprocesses](docs/pipeline_map.png)
+
+*The project at a glance. Each step (left) is mapped to its **evaluation** (middle — the offline
+metric and its live, in-flight approximation) and its **guardrail** (right, aligned to the step it
+protects). Two subprocesses today: **Retrieval** (dense → rerank → context window) and
+self-corrective **Generation** (grade → rewrite ⟲ → generate → output guard). Everything shown is
+live unless tagged `planned`. [**Open the interactive version →**](docs/pipeline_map.html)*
 
 ## Design principle: adopt the standard, own the decision
 
@@ -19,7 +29,7 @@ domain span attributes, and the gate thresholds.
 
 | Concern | Tool adopted | What we own |
 |---|---|---|
-| Observability | OpenInference + OpenTelemetry → **LangSmith** (OTLP) | the `hcft.*` domain span attributes |
+| Observability | native **LangSmith** tracing (LangChain/LangGraph) | the `hcft.*` domain verdicts on each run |
 | Component / outcome eval | **DeepEval**, **RAGAS** (faithfulness, answer-relevancy) | which metric binds to which node |
 | Overlap reference metrics | `evaluate` / `torchmetrics` (ROUGE, BERTScore) | gold test-set curation |
 | Custom verdicts (refusal/route) | **DeepEval G-Eval** | the metric definitions + thresholds |
@@ -66,16 +76,20 @@ retriever miss) not the reranker (4.4% rerank miss). `--calibrate` dumps the gol
 unanswerable score distributions to set the grade-gate threshold empirically.
 
 ### Telemetry — `src/hcft_agent/obs/`
-`telemetry.py` wires OpenInference + OTel → LangSmith over OTLP (vendor-neutral; swap the
-endpoint for Phoenix/Langfuse by env var). `attributes.py` defines the `hcft.*` namespace
-(route, refusal, grounded, degraded, guard verdicts) the eval and guards read off the trace.
+`telemetry.py` enables **native LangSmith tracing** (`LANGSMITH_TRACING`) and exposes
+`trace_block()` (nest non-LangChain sub-steps) + `tag()` (attach `hcft.*` domain verdicts —
+route, refusal, grounded, degraded — to each run). We started on OpenInference/OTel→OTLP but
+reversed it: LangGraph's worker threads broke OTel's thread-local span context, orphaning every
+node into its own root trace; LangChain's native tracer nests across those threads. Trade-off
+(lost OTel vendor-neutrality) and the mechanism are recorded in [`SESSION_LOG.md`](docs/SESSION_LOG.md) §9a.
 
 ## Status
 
-- [x] Telemetry: OpenInference/OTel → LangSmith (verified end-to-end)
+- [x] Telemetry: native LangSmith tracing — clean nested run trees (verified via the run tree)
 - [x] Retrieval-quality harness + first real numbers (448 q; hit@5 post 0.862)
-- [x] **P1 RAG chat agent** — span-per-node, deterministic gates, HHEM output guard
-- [ ] Grade-gate threshold calibration (`eval.retrieval --calibrate`)
+- [x] **P1 RAG chat agent** — one span/node, deterministic gates, HHEM output guard, Streamlit UI
+- [x] Grade-gate threshold calibration (`eval.retrieval --calibrate`) — found rerank_score is a
+      weak answer/refuse signal; refusal delegated to the output guard
 - [ ] Eval wiring: DeepEval + RAGAS + G-Eval custom metrics + pytest gate
 - [ ] Input ring upgrade: heuristic → Prompt-Guard-86M
 - [ ] P3 deep-analysis agent (MongoDB aggregation + map-reduce synthesis)
@@ -87,21 +101,21 @@ endpoint for Phoenix/Langfuse by env var). `attributes.py` defines the `hcft.*` 
 - `src/hcft_agent/`
   - `agents/` — the LangGraph agents (`rag_chat.py`, `state.py`)
   - `guards/` — `input_ring.py` (injection/PII), `groundedness.py` (HHEM output ring)
-  - `obs/` — `telemetry.py` (OTel→LangSmith), `attributes.py` (`hcft.*` keys)
+  - `obs/` — `telemetry.py` (native LangSmith tracing + `trace_block()`/`tag()`)
   - `eval/` — `retrieval.py` (deterministic retrieval harness + gate calibration)
   - `retriever.py` (dense + rerank), `generate.py` (grounded reader), `config.py` (settings)
 - `docs/`
   - [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) — graph topology, per-stage eval×guard×fallback, build plan
   - [`SESSION_LOG.md`](docs/SESSION_LOG.md) — the design record + measured results
   - [`CONCEPTS.md`](docs/CONCEPTS.md) — tracked glossary of every eval/safety/obs concept
-  - [`pipeline_map.html`](docs/pipeline_map.html) — living step × evaluation × guardrail map (open in a browser)
+  - [`pipeline_map.html`](docs/pipeline_map.html) — the living step × evaluation × guardrail map (the README image is a snapshot of this)
 
 ## Stack
 
 | Component | Choice | Notes |
 |---|---|---|
 | Orchestration | LangGraph | explicit control flow; per-node spans for eval/guard binding |
-| Observability | OpenInference + OTel → LangSmith | OTLP ingest, vendor-neutral |
+| Observability | native LangSmith tracing | LangChain/LangGraph run trees; `trace_block()`/`tag()` for sub-steps |
 | Vectors | Pinecone `hcft` (768-dim, cosine) | reused from HCFT; vectors only, no text |
 | Rerank | BAAI/bge-reranker-v2-m3 | reused from HCFT stage 06 |
 | Text + metadata | MongoDB 7 (Docker, `hcft-mongo` :27017) | replaces HCFT's sqlite text store |
