@@ -1,76 +1,80 @@
-"""OpenTelemetry + OpenInference wiring, exporting to LangSmith over OTLP/HTTP.
+"""Native LangSmith tracing (LangChain / LangGraph first-party).
 
-One idempotent call to :func:`init_telemetry` sets up:
-  * an OTel ``TracerProvider``;
-  * the OTLP/HTTP exporter pointed at LangSmith's OTel endpoint — swap the endpoint for any
-    OTel backend (Phoenix/Langfuse/…) by env var and nothing else changes (vendor-neutral);
-  * OpenInference's LangChain instrumentation, which auto-creates spans for every LLM / tool /
-    retriever / chain step (LangGraph is built on LangChain runnables, so it's covered too),
-    with token + cost attributes following the GenAI semantic conventions.
+We switched OFF the OTel / OpenInference OTLP path. Why: LangGraph runs each node in a worker
+thread, and OpenTelemetry's "current span" lives in a thread-local context that did NOT
+propagate into those threads — so every manual span started inside a node orphaned into its
+own root trace (an unreadable flat list). LangChain's native tracer threads its run-tree
+context through its own callback machinery across those worker threads, so node spans nest
+correctly with zero effort. Trade-off: this is LangSmith-specific — we give up the
+vendor-neutral "swap the OTel endpoint for Phoenix/Langfuse" property. Acceptable here.
 
-Env (.env): ``LANGSMITH_API_KEY`` (required to export), ``LANGSMITH_PROJECT`` (optional).
-With no key, telemetry stays local and never blocks the app — observability fails *open*.
+Enable by env (.env): ``LANGSMITH_API_KEY`` (required to export), ``LANGSMITH_PROJECT``
+(optional, defaults to the service name). With no key, tracing stays off and the app still
+runs — observability fails *open*.
+
+Helpers:
+  * :func:`init_telemetry` — idempotent; flips ``LANGSMITH_TRACING`` on.
+  * :func:`trace_block`    — context manager that nests a child run under the current run tree
+                             (no-op when tracing is off); used for non-LangChain sub-steps
+                             (retriever stages, the HHEM guard, the UI run).
+  * :func:`tag`            — attach metadata (our ``hcft.*`` verdicts) to the current run.
+  * :func:`flush`          — wait for background tracers before a short-lived process exits.
 """
 from __future__ import annotations
 
 import os
+from contextlib import nullcontext
 from functools import lru_cache
-
-# LangSmith's OTLP/HTTP traces endpoint (self-hosted: <instance>/api/v1/otel/v1/traces).
-LANGSMITH_OTLP_TRACES_ENDPOINT = "https://api.smith.langchain.com/otel/v1/traces"
 
 
 @lru_cache(maxsize=1)
 def init_telemetry(service_name: str = "hcft-agent") -> bool:
-    """Idempotent. Returns ``True`` if spans are being exported to LangSmith, ``False`` if
-    no API key is set (app still runs — obs fails open)."""
-    from opentelemetry import trace
-    from opentelemetry.sdk.resources import Resource
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    from openinference.instrumentation.langchain import LangChainInstrumentor
-
-    provider = TracerProvider(resource=Resource.create({"service.name": service_name}))
-
-    exporting = False
-    api_key = os.getenv("LANGSMITH_API_KEY")
-    if api_key:
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-
-        headers = {"x-api-key": api_key}
-        project = os.getenv("LANGSMITH_PROJECT")
-        if project:
-            headers["Langsmith-Project"] = project
-        provider.add_span_processor(
-            BatchSpanProcessor(
-                OTLPSpanExporter(endpoint=LANGSMITH_OTLP_TRACES_ENDPOINT, headers=headers)
-            )
-        )
-        exporting = True
-
-    trace.set_tracer_provider(provider)
-    LangChainInstrumentor().instrument(tracer_provider=provider)
-    return exporting
+    """Idempotent. Returns ``True`` if LangSmith tracing is enabled, ``False`` if no API key."""
+    if not os.getenv("LANGSMITH_API_KEY"):
+        os.environ["LANGSMITH_TRACING"] = "false"
+        return False
+    os.environ.setdefault("LANGSMITH_PROJECT", service_name)
+    os.environ["LANGSMITH_TRACING"] = "true"
+    return True
 
 
-def get_tracer(name: str = "hcft-agent"):
-    from opentelemetry import trace
-
-    return trace.get_tracer(name)
+def _tracing_on() -> bool:
+    return os.getenv("LANGSMITH_TRACING") == "true"
 
 
-def current_span():
-    """The span in the active context — attach ``hcft.*`` attributes to it."""
-    from opentelemetry import trace
+def trace_block(name: str, run_type: str = "chain", **kwargs):
+    """Context manager nesting a child run (``name``) under the active run tree. No-op when
+    tracing is off or langsmith is unavailable — so call sites stay clean and fail open."""
+    if _tracing_on():
+        try:
+            from langsmith import trace as _trace
 
-    return trace.get_current_span()
+            return _trace(name=name, run_type=run_type, **kwargs)
+        except Exception:
+            pass
+    return nullcontext()
+
+
+def tag(**metadata) -> None:
+    """Attach ``hcft.*`` verdicts (or any metadata) to the current run, so they're queryable on
+    the trace. No-op when there's no active run."""
+    if not _tracing_on():
+        return
+    try:
+        from langsmith import get_current_run_tree
+
+        rt = get_current_run_tree()
+        if rt is not None:
+            rt.add_metadata({k: v for k, v in metadata.items() if v is not None})
+    except Exception:
+        pass
 
 
 def flush() -> None:
-    """Force-export buffered spans (BatchSpanProcessor is async; call before a short script
-    exits so traces actually reach LangSmith)."""
-    from opentelemetry import trace
+    """Block until queued traces are sent (call before a short script exits)."""
+    try:
+        from langchain_core.tracers.langchain import wait_for_all_tracers
 
-    provider = trace.get_tracer_provider()
-    if hasattr(provider, "force_flush"):
-        provider.force_flush()
+        wait_for_all_tracers()
+    except Exception:
+        pass

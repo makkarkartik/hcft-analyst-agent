@@ -40,9 +40,12 @@ class GroundednessGuard:
         Empty context or empty answer -> 0.0 (nothing to be grounded in / nothing said)."""
         if not context.strip() or not answer.strip():
             return 0.0
-        # HHEM expects (premise, hypothesis) == (evidence, claim) == (context, answer).
-        scores = self._get_model().predict([(context, answer)])
-        return float(scores[0])
+        from hcft_agent.obs.telemetry import trace_block
+
+        with trace_block("guard.hhem", run_type="tool"):
+            # HHEM expects (premise, hypothesis) == (evidence, claim) == (context, answer).
+            scores = self._get_model().predict([(context, answer)])
+            return float(scores[0])
 
     def is_grounded(self, context: str, answer: str) -> tuple[bool, float]:
         """Convenience: (passes_threshold, score) using ``settings.grounded_min_score``."""

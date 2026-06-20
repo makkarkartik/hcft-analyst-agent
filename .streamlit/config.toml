@@ -1,0 +1,11 @@
+# Light theme by default + a calmer palette. Custom font (Inter) is injected via CSS in app.py.
+[theme]
+base = "light"
+primaryColor = "#3b6fe0"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f6fb"
+textColor = "#1f2630"
+font = "sans serif"
+
+[server]
+headless = true

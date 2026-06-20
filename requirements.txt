@@ -39,3 +39,4 @@ bert-score
 
 # Guardrails (input ring) — pin specific models at P2:
 #   Llama Guard / Prompt Guard via `transformers`; nemoguardrails / guardrails-ai TBD
+streamlit

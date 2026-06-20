@@ -291,9 +291,32 @@ the annotation queue for labeling the 100-example anchor slice. **Having LangSmi
 evals** — measurement validity (gate thresholds, judge-circularity breakers, the human
 anchor) stays our design.
 
-Integration: set `LANGCHAIN_TRACING_V2=true` + `LANGCHAIN_API_KEY` + `LANGCHAIN_PROJECT`;
-LangGraph traces automatically. Our trace schema stays the source of truth, mirrored to
-LangSmith for inspection.
+Integration: set `LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY` + `LANGSMITH_PROJECT`;
+LangGraph traces automatically.
+
+### 9a. Transport: OTel/OpenInference → **native LangSmith** (reversed 2026-06-19)
+
+We first wired tracing via **OpenInference + OpenTelemetry → LangSmith over OTLP** for the
+vendor-neutral "swap the endpoint for Phoenix/Langfuse" property. **It broke nesting** and we
+reversed it. Mechanism (worth keeping — it's a real, non-obvious failure mode):
+
+- LangGraph runs each node in a **worker thread**. OTel's "current span" is a **thread-local**
+  context that did **not** propagate into those threads. Every manual `start_as_current_span`
+  inside a node therefore **orphaned into its own ROOT trace** → an unreadable flat list of
+  hundreds of single-span "traces," no drill-down.
+- LangChain's **native tracer** threads its run-tree context through its **own callback
+  machinery** across those worker threads, so node runs nest correctly with zero effort.
+
+**Verified** by querying the LangSmith run tree directly (parent/child): one `LangGraph` root,
+with `retrieve → {embed, pinecone, hydrate, rerank}`, `generate → ChatOpenAI`,
+`output_guard → guard.hhem` all nested.
+
+Implementation: `obs/telemetry.py` now just flips `LANGSMITH_TRACING` on (fails open w/o key)
+and exposes `trace_block()` (a LangSmith `trace` context manager for non-LangChain sub-steps —
+retriever stages, HHEM guard, the UI run) + `tag()` (attach `hcft.*` verdicts as run metadata).
+Node verdicts also ride in the returned **state**, so they show in each node's output. Cost of
+the reversal: we **lose OTel vendor-neutrality** (now LangSmith-specific). Accepted — a usable
+trace tree beats a portable but unreadable one. The OpenInference/OTLP deps are now unused.
 
 ---
 

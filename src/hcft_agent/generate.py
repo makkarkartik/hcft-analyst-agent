@@ -39,12 +39,9 @@ def _client():
     )
 
 
-def generate(question: str, hits: list[dict]) -> dict:
-    """Answer ``question`` from the top ``context_top_k`` ``hits`` (each a candidate dict with
-    ``chunk_id`` + ``text``). Returns ``{answer, cited_ids, context, is_refusal}``.
-
-    ``cited_ids`` are mapped from the model's ``[Source N]`` markers back to chunk ids, so a
-    downstream check can verify the citation actually supports the statement."""
+def build_context(question: str, hits: list[dict]) -> tuple[str, list, dict]:
+    """Assemble the numbered-source context + the chat messages + the ``{N: chunk_id}`` map.
+    Shared by :func:`generate` and :func:`stream` so the prompt has ONE source of truth."""
     window = hits[: settings.context_top_k]
     blocks, id_by_num = [], {}
     for i, h in enumerate(window, 1):
@@ -52,13 +49,33 @@ def generate(question: str, hits: list[dict]) -> dict:
         text = (h.get("text") or "")[: settings.context_char_cap]
         blocks.append(f"[Source {i}] {text}")
     context = "\n\n".join(blocks)
+    messages = [("system", _SYSTEM), ("human", f"Question: {question}\n\nSources:\n{context}\n\nAnswer:")]
+    return context, messages, id_by_num
 
-    prompt = f"Question: {question}\n\nSources:\n{context}\n\nAnswer:"
-    resp = _client().invoke([("system", _SYSTEM), ("human", prompt)])
-    answer = (resp.content or "").strip()
 
+def finalize(answer: str, id_by_num: dict, context: str) -> dict:
+    """Map ``[Source N]`` markers -> cited chunk ids and detect refusal. Shared post-processing."""
+    answer = (answer or "").strip()
     cited_nums = {int(n) for n in _CITE_RE.findall(answer)}
     cited_ids = [id_by_num[n] for n in sorted(cited_nums) if n in id_by_num]
-    is_refusal = answer.startswith(REFUSAL_TEXT[:40])
+    return {
+        "answer": answer, "cited_ids": cited_ids, "context": context,
+        "is_refusal": answer.startswith(REFUSAL_TEXT[:40]),
+    }
 
-    return {"answer": answer, "cited_ids": cited_ids, "context": context, "is_refusal": is_refusal}
+
+def generate(question: str, hits: list[dict]) -> dict:
+    """Answer ``question`` from the top ``context_top_k`` ``hits``. Returns
+    ``{answer, cited_ids, context, is_refusal}`` (cited ids mapped from ``[Source N]``)."""
+    context, messages, id_by_num = build_context(question, hits)
+    resp = _client().invoke(messages)
+    return finalize(resp.content, id_by_num, context)
+
+
+def stream(question: str, hits: list[dict]):
+    """Token generator for live UIs. Yields text deltas as they arrive; the caller accumulates
+    the full answer and can then call :func:`finalize` on it. Same prompt as :func:`generate`."""
+    _, messages, _ = build_context(question, hits)
+    for chunk in _client().stream(messages):
+        if chunk.content:
+            yield chunk.content

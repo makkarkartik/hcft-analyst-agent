@@ -88,17 +88,26 @@ class Retriever:
     def _rank(self, question: str, rerank: bool = True) -> list[dict]:
         """Full candidate list in DENSE order (Pinecone score desc), hydrated, with a
         ``rerank_score`` added per candidate when ``rerank`` is set. NOT truncated — the
-        caller decides. Shared by :meth:`retrieve` (pipeline) and :meth:`candidates` (eval)."""
-        vec = self.embed_query(question)
-        res = self._get_index().query(
-            vector=vec.tolist(), top_k=settings.dense_top_k, include_metadata=True
-        )
+        caller decides. Shared by :meth:`retrieve` (pipeline) and :meth:`candidates` (eval).
+
+        Each sub-stage is its own nested LangSmith run (embed / pinecone_query / hydrate /
+        rerank) so the latency breakdown shows up under the caller's run — no ad-hoc timing."""
+        from hcft_agent.obs.telemetry import trace_block
+
+        with trace_block("retriever.embed", run_type="embedding"):
+            vec = self.embed_query(question)
+
+        with trace_block("retriever.pinecone_query", run_type="retriever"):
+            res = self._get_index().query(
+                vector=vec.tolist(), top_k=settings.dense_top_k, include_metadata=True
+            )
         ids, dense = [], {}
         for m in res.get("matches", []):
             ids.append(m["id"])
             dense[m["id"]] = float(m["score"])
 
-        hydrated = self._hydrate(ids)
+        with trace_block("retriever.hydrate", run_type="tool"):
+            hydrated = self._hydrate(ids)
         cands = []
         for cid in ids:
             doc = hydrated.get(cid, {})
@@ -114,11 +123,12 @@ class Retriever:
             })
 
         if rerank and cands:
-            scores = self._get_reranker().predict(
-                [(question, c["text"]) for c in cands], show_progress_bar=False
-            )
-            for c, s in zip(cands, scores):
-                c["rerank_score"] = float(s)
+            with trace_block("retriever.rerank", run_type="chain"):
+                scores = self._get_reranker().predict(
+                    [(question, c["text"]) for c in cands], show_progress_bar=False
+                )
+                for c, s in zip(cands, scores):
+                    c["rerank_score"] = float(s)
         return cands
 
     def retrieve(self, question: str, rerank: bool = True) -> list[dict]:
