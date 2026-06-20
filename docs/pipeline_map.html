@@ -82,6 +82,7 @@
   .pill { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; margin-left: 8px;
           border: 1px solid currentColor; }
   .pill.green { color: var(--green); } .pill.red { color: var(--red); }
+  .pill.amber { color: #d8a23a; } .pill.gray { color: #8a94a3; }
   .planned { opacity: .6; }
   .foot { color: var(--muted); font-size: 12px; margin-top: 8px; }
 </style>
@@ -96,7 +97,7 @@
     <span><span class="swatch sw-blue"></span><b>Steps</b> — control flow (↓)</span>
     <span><span class="swatch sw-green"></span><b>Evaluation</b> — offline metric &nbsp;·&nbsp; <i>italic = live/in-flight approximation</i></span>
     <span><span class="swatch sw-red"></span><b>Guardrails</b> — aligned to the step they protect</span>
-    <span><span class="pill green">live</span> runs at inference &nbsp; <span class="pill red planned">planned</span> not yet built</span>
+    <span><span class="pill green">live</span> enforced &nbsp; <span class="pill amber">partial</span> detected only &nbsp; <span class="pill gray">N/A</span> by design &nbsp; <span class="pill red planned">planned</span> not yet built</span>
   </div>
 
   <!-- ============================================================ -->
@@ -113,8 +114,11 @@
     <div class="row">
       <div class="cell step flow"><div class="t">query</div><div class="d">user question (raw)</div></div>
       <div class="cell empty"></div>
-      <div class="cell guard"><div class="t">input ring <span class="pill red planned">planned</span></div>
-        <div class="d">injection / PII heuristic scan on the query before it enters the graph</div></div>
+      <div class="cell guard"><div class="t">input ring
+        <span class="pill green">injection</span> <span class="pill amber">PII</span> <span class="pill red planned">upgrade</span></div>
+        <div class="d"><b>injection → fail-closed</b> before retrieval (live). <b>PII detected</b> on the trace
+        but not yet enforced (partial). <i>Planned:</i> heuristic → Prompt-Guard-86M + PII redaction
+        before the query is embedded / logged.</div></div>
     </div>
 
     <!-- embed -->
@@ -132,7 +136,9 @@
       <div class="cell eval"><div class="t">recall@50 = 0.906</div>
         <div class="d">did gold reach the candidate pool — the hard ceiling on RAG quality</div>
         <span class="live">live: no gold at inference; pool size is the only knob</span></div>
-      <div class="cell empty"></div>
+      <div class="cell guard"><div class="t">doc-level authorization <span class="pill gray">N/A</span></div>
+        <div class="d">enterprise RAG scopes retrieval to the caller's permitted documents (the confused-deputy
+        defense). <b>N/A here — the HCFT corpus is fully public</b>, so there's no per-user access boundary.</div></div>
     </div>
 
     <!-- hydrate -->
