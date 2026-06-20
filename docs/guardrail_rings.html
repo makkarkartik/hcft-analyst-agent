@@ -77,12 +77,12 @@
       <div class="ring-h">① Input ring — ingress</div>
       <div class="ring-d">guards on what ENTERS, before the agent acts</div>
       <div class="guards">
-        <div class="g"><div class="gt">prompt injection <span class="pill live">live</span> <span class="pill planned">→ Prompt-Guard-2</span></div>
-          <div class="gd">fail-closed on override attempts; heuristic now → Llama-Prompt-Guard-2-86M (mDeBERTa)</div></div>
-        <div class="g"><div class="gt">PII <span class="pill partial">partial</span> <span class="pill planned">→ Presidio</span></div>
-          <div class="gd">detected on the trace; redact-before-embed/log via Microsoft Presidio = the gap</div></div>
-        <div class="g"><div class="gt">jailbreak / secrets <span class="pill planned">planned</span></div>
-          <div class="gd">covered by Prompt-Guard-2 (jailbreak) + a secrets scanner</div></div>
+        <div class="g"><div class="gt">prompt injection <span class="pill live">live</span></div>
+          <div class="gd">fail-closed on override attempts; Meta <b>Llama-Prompt-Guard-2-86M</b> (live) — covers direct AND indirect injection</div></div>
+        <div class="g"><div class="gt">PII redaction <span class="pill live">live</span></div>
+          <div class="gd">Microsoft Presidio: redact unambiguous identifiers BEFORE embed/log — enforced, not just flagged</div></div>
+        <div class="g"><div class="gt">jailbreak <span class="pill live">live</span> · secrets <span class="pill planned">planned</span></div>
+          <div class="gd">jailbreak covered by Prompt-Guard-2 (live); a secrets scanner is still planned</div></div>
       </div>
 
       <!-- AGENT CORE -->
@@ -90,9 +90,20 @@
         <div class="ring-h">Agent core — LangGraph</div>
         <div class="flow">
           <span class="node">retrieve</span><span class="arr">→</span>
+          <span class="node">context_guard</span><span class="arr">→</span>
           <span class="node">grade</span><span class="arr">→</span>
           <span class="node">rewrite ⟲</span><span class="arr">→</span>
           <span class="node">generate</span>
+        </div>
+
+        <!-- CONTEXT RING (untrusted retrieved input) -->
+        <div class="ring" style="background:var(--in-bg);border:2px solid var(--in-bd)">
+          <div class="ring-h" style="color:var(--in)">②a Context ring — retrieved chunks (untrusted input)</div>
+          <div class="ring-d">indirect prompt injection: the model attacked through DATA (a poisoned chunk), not the user's message</div>
+          <div class="guards">
+            <div class="g"><div class="gt">indirect-injection scan <span class="pill live">live</span></div>
+              <div class="gd">score each retrieved chunk; quarantine poisoned, fail-closed (refuse) if all poisoned; own eval + gate</div></div>
+          </div>
         </div>
 
         <!-- ACTION RING -->

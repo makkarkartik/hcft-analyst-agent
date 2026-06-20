@@ -11,3 +11,8 @@ requires-python = ">=3.11"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]       # find hcft_agent without relying on an editable install
+testpaths = ["tests"]
+addopts = "-q"

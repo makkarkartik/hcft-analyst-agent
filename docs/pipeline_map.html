@@ -115,10 +115,10 @@
       <div class="cell step flow"><div class="t">query</div><div class="d">user question (raw)</div></div>
       <div class="cell empty"></div>
       <div class="cell guard"><div class="t">input ring
-        <span class="pill green">injection</span> <span class="pill amber">PII</span> <span class="pill red planned">upgrade</span></div>
-        <div class="d"><b>injection → fail-closed</b> before retrieval (live). <b>PII detected</b> on the trace
-        but not yet enforced (partial). <i>Planned:</i> heuristic → Prompt-Guard-86M + PII redaction
-        before the query is embedded / logged.</div></div>
+        <span class="pill green">injection</span> <span class="pill green">PII redact</span></div>
+        <div class="d"><b>injection → fail-closed</b> before retrieval (live; Meta <b>Prompt-Guard-2</b> —
+        Llama-Prompt-Guard-2-86M — direct + indirect injection). <b>PII redacted</b> (Presidio, enforced —
+        not just flagged) before the query is embedded / logged.</div></div>
     </div>
 
     <!-- embed -->
@@ -159,13 +159,16 @@
       <div class="cell empty"></div>
     </div>
 
-    <!-- window -->
+    <!-- context_guard / window -->
     <div class="row">
-      <div class="cell step"><div class="t">window → context</div>
-        <div class="d">top-k = 5 chunks assembled into the generator's context</div></div>
-      <div class="cell empty"></div>
-      <div class="cell guard"><div class="t">indirect-injection scan <span class="pill red planned">planned</span></div>
-        <div class="d">retrieved chunks are untrusted input — scan for poisoned instructions before they reach the LLM</div></div>
+      <div class="cell step"><div class="t">context_guard → window</div>
+        <div class="d">scan retrieved chunks, quarantine poisoned, assemble top-k = 5 into context</div></div>
+      <div class="cell eval"><div class="t">detection recall · false-positive rate</div>
+        <div class="d">indirect-injection probe (planted injections vs clean corpus chunks) — own eval + gate</div>
+        <span class="live">live: per-chunk injection score; quarantine ≥ threshold</span></div>
+      <div class="cell guard"><div class="t">indirect-injection scan <span class="pill green">live</span></div>
+        <div class="d">retrieved chunks are <b>untrusted input</b> — quarantine poisoned chunks before the reader;
+        fail closed (refuse) if all are poisoned. Same classifier as the input ring.</div></div>
     </div>
 
     <p class="foot" style="padding:0 18px;">Headline: <b>hit@5 POST-rerank = 0.862</b> (gold in the generator's window) · 448 grounded questions · judged off gold <code>source_chunk_id</code> (no LLM, no circularity).</p>

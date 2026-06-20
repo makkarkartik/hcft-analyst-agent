@@ -54,6 +54,7 @@ def main() -> None:
     ap.add_argument("--testset", type=Path, default=V3)
     ap.add_argument("--limit", type=int, default=120)
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--out", type=Path, default=None, help="dump {dense,hybrid,lift,n} JSON for run_eval")
     args = ap.parse_args()
 
     rows = [json.loads(l) for l in open(args.testset, encoding="utf-8")]
@@ -69,10 +70,17 @@ def main() -> None:
         print(f"  {mode:7s} " + "  ".join(f"{k}={v:.3f}" for k, v in results[mode].items()))
     r.close()
 
+    lift = {k: round(results["hybrid"][k] - results["dense"][k], 3) for k in results["dense"]}
     print("\n  lift (hybrid − dense):")
-    for k in results["dense"]:
-        d = results["hybrid"][k] - results["dense"][k]
+    for k, d in lift.items():
         print(f"    {k:16s} {d:+.3f}")
+
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(
+            {"n": len(rows), "seed": args.seed, "dense": results["dense"],
+             "hybrid": results["hybrid"], "lift": lift}, indent=2), encoding="utf-8")
+        print(f"\n  dumped -> {args.out}")
 
 
 if __name__ == "__main__":

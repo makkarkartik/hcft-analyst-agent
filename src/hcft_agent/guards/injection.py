@@ -32,12 +32,27 @@ class InjectionGuard:
             )
         return self._pipe
 
+    @staticmethod
+    def _malicious_mass(class_scores: list[dict]) -> float:
+        return max((s["score"] for s in class_scores if s["label"].upper() in _MALICIOUS), default=0.0)
+
     def score(self, text: str) -> float:
         """P(malicious) in 0..1 — the mass on the injection/jailbreak class."""
         if not text.strip():
             return 0.0
-        scores = self._load()(text)[0]  # list[{label, score}]
-        return max((s["score"] for s in scores if s["label"].upper() in _MALICIOUS), default=0.0)
+        return self._malicious_mass(self._load()(text)[0])  # [0] -> this input's class list
+
+    def scores(self, texts: list[str]) -> list[float]:
+        """Batch P(malicious) — one forward pass for many chunks (the context-ring scan path).
+        Empty/blank texts score 0.0 without hitting the model."""
+        idx = [i for i, t in enumerate(texts) if t and t.strip()]
+        out = [0.0] * len(texts)
+        if not idx:
+            return out
+        results = self._load()([texts[i] for i in idx])  # list[list[{label,score}]]
+        for i, res in zip(idx, results):
+            out[i] = self._malicious_mass(res)
+        return out
 
     def is_injection(self, text: str) -> tuple[bool, float]:
         s = self.score(text)

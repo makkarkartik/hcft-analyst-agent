@@ -22,7 +22,9 @@ class RagState(TypedDict, total=False):
 
     # --- domain verdicts (-> hcft.* attributes; eval/guards read these) ---
     input_flags: list[str]   # input-ring findings, e.g. ["injection","pii"]
-    retrieved_ids: list[str] # chunk ids in the context window
+    retrieved_ids: list[str] # chunk ids in the (post-quarantine) context window
+    quarantined_ids: list[str]  # chunks dropped by the context ring (indirect injection)
+    context_threat: float    # max injection score among retrieved chunks (context ring)
     cited_ids: list[str]     # chunk ids the answer actually cited
     grounded_score: float    # HHEM P(grounded); set by the output guard
     grounded: bool           # grounded_score >= threshold

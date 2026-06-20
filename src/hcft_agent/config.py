@@ -78,6 +78,13 @@ class Settings:
     injection_model: str = os.getenv("INJECTION_MODEL") or "protectai/deberta-v3-base-prompt-injection-v2"
     injection_threshold: float = 0.5
 
+    # --- context ring: indirect-injection scan on RETRIEVED chunks (untrusted input) ---
+    # Retrieved chunks can carry "ignore your instructions ..." into the reader. We scan each chunk
+    # that could enter the context window with the SAME injection classifier and QUARANTINE any
+    # that clear this threshold (kept higher than the input threshold: document prose triggers more
+    # false positives than a short user query, and the eval tracks that FP rate).
+    context_injection_threshold: float = float(os.getenv("CONTEXT_INJECTION_THRESHOLD") or 0.8)
+
     # --- input ring: PII detection + redaction (Microsoft Presidio) ---
     # Redact only UNAMBIGUOUS identifiers — NOT PERSON/LOCATION/DATE, which are often legitimate
     # query content (e.g. "hospitals in California") and whose redaction would wreck retrieval.
@@ -86,6 +93,32 @@ class Settings:
         "EMAIL_ADDRESS", "PHONE_NUMBER", "US_SSN", "CREDIT_CARD", "US_BANK_NUMBER",
         "IBAN_CODE", "US_DRIVER_LICENSE", "MEDICAL_LICENSE", "IP_ADDRESS", "CRYPTO",
     )
+
+    # === Offline LLM-judge eval stack (DeepEval G-Eval + RAGAS cross-family + κ validation) ===
+    # Two judges on PURPOSE-different model families so a same-model rubber-stamp can't pass twice:
+    #   * G-Eval (DeepEval)  -> OpenAI gpt-4o-mini — SAME family as the reader, so it's the strict
+    #     "gate" judge and the one we then VALIDATE (a same-family judge is the circularity risk).
+    #   * RAGAS faithfulness/answer-relevancy -> Fireworks Llama-3.3-70B — a DIFFERENT family, the
+    #     cross-family second opinion that catches what a same-family judge would wave through.
+    # The actual circularity-breaker is κ against a DETERMINISTIC anchor (gold, non-LLM) below.
+    geval_judge_model: str = os.getenv("GEVAL_JUDGE_MODEL") or "gpt-4o-mini"
+    # RAGAS judge = the only NON-CHINESE serverless LLM this Fireworks key reaches: OpenAI's open-
+    # weight gpt-oss-120b (Apache-2.0 MoE). It's a DIFFERENT model + training recipe from the
+    # gpt-4o-mini reader/G-Eval (cross-MODEL, served off a different stack), though same vendor
+    # lineage — so weaker than a true cross-vendor judge (Gemma/Nemotron aren't on this key). The
+    # κ deterministic anchor is what actually breaks circularity; this adds a structured
+    # claim-decomposition+NLI second opinion. Verified: supported→1.0, hallucinated→0.0.
+    ragas_judge_model: str = (
+        os.getenv("RAGAS_JUDGE_MODEL") or "accounts/fireworks/models/gpt-oss-120b"
+    )
+    ragas_judge_base_url: str = os.getenv("RAGAS_JUDGE_BASE_URL") or "https://api.fireworks.ai/inference/v1"
+    ragas_judge_api_key: str = os.getenv("RAGAS_JUDGE_API_KEY") or os.getenv("FIREWORKS_API_KEY", "")
+    # Answer-relevancy needs an embedder; OpenAI's small model keeps it cheap + dependency-free.
+    ragas_embed_model: str = os.getenv("RAGAS_EMBED_MODEL") or "text-embedding-3-small"
+    geval_threshold: float = 0.5        # G-Eval score ≥ this -> judge says "appropriate"
+    # κ judge-validation: deterministic anchor by default. Drop a human-labeled JSONL here
+    # (one {"qa_id":..., "appropriate": bool} per line) to upgrade to a true HUMAN κ.
+    kappa_human_labels: str = os.getenv("KAPPA_HUMAN_LABELS") or ""
 
 
 settings = Settings()
