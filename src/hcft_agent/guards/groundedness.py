@@ -32,6 +32,14 @@ class GroundednessGuard:
             self._model = AutoModelForSequenceClassification.from_pretrained(
                 settings.hhem_model, trust_remote_code=True
             )
+            # HHEM-2.1-open is T5-based (relative position embeddings -> NO hard length limit;
+            # verified empirically it scores evidence placed past token 512). Its bundled T5
+            # tokenizer ships model_max_length=512, which only emits a *spurious* "sequence too
+            # long" warning — no truncation actually happens. Raise it to the model's real ~8k
+            # support so the warning stops misleading. (Vectara misspells the attr as 'tokenzier'.)
+            tok = getattr(self._model, "tokenzier", None) or getattr(self._model, "tokenizer", None)
+            if tok is not None:
+                tok.model_max_length = 8192
         return self._model
 
     def score(self, context: str, answer: str) -> float:

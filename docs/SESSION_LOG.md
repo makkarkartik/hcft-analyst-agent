@@ -418,3 +418,25 @@ hybrid A/B; de-prioritizes a fancier reranker.
 **Caveat:** slightly exceeds the canonical resume figures (hit@1 0.66 / hit@5 0.84 /
 MRR 0.74) — different split (predates qa_v2 curation). Resume numbers stay the cited FT
 result; these are the agent project's own substrate.
+
+---
+
+## 14. HHEM output-guard long-context — a non-bug (verified 2026-06-19)
+
+The HHEM groundedness guard logged `Token indices sequence length is longer than the specified
+maximum sequence length for this model (… > 512)` on every call (our 5-chunk context is ~2100
+tokens). It *looked* like the guard was scoring against only the first 512 tokens — a real
+correctness gap if true. **It wasn't.** Measured before "fixing":
+
+| context (~1233 tok) | groundedness |
+|---|---|
+| pure filler, NO evidence | **0.052** (correctly ungrounded) |
+| filler + evidence at the very END (past token 512) | **0.94** (correctly grounded) |
+
+Evidence placed *past* token 512 still scores grounded → the model reads it. Mechanism:
+**HHEM-2.1-open is T5-based**, and T5 uses **relative position embeddings** → no hard
+sequence-length limit. The `512` is only the bundled T5 tokenizer's default `model_max_length`,
+which emits a spurious warning but does **not** truncate `predict()`. Fix was therefore *not*
+per-chunk scoring (would've been wasted work) — just raise `tokenzier.model_max_length` (sic —
+Vectara's typo) to HHEM's real ~8k so the warning stops misleading. A clean
+"measure-before-you-fix" save.
