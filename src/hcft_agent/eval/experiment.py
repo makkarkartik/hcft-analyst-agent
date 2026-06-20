@@ -19,8 +19,16 @@ Shape:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
+import sys
 from pathlib import Path
+
+# Windows: the default Proactor event loop raises "Event loop is closed" and can HANG when
+# asyncio.run() (RAGAS scores each row in its own short-lived loop) tears down httpx connections —
+# that's what wedged the last run at row 29/30. The Selector loop closes cleanly. Set before any loop.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from hcft_agent.config import settings
 from hcft_agent.eval import agent_eval, judges
@@ -40,7 +48,7 @@ def sync_dataset(client, name: str, rows: list[dict], recreate: bool = False) ->
         client.delete_dataset(dataset_id=existing.id)
         existing = None
     if existing:
-        n = client.count_examples(dataset_id=existing.id)
+        n = sum(1 for _ in client.list_examples(dataset_id=existing.id))   # 0.8.x has no count_examples
         if n >= len(rows):
             print(f"[experiment] reusing dataset '{name}' ({n} examples)")
             return existing.id
@@ -63,27 +71,49 @@ def sync_dataset(client, name: str, rows: list[dict], recreate: bool = False) ->
 
 
 # ----------------------------------------------------------------- target (the agent)
-_WARM = {"done": False}
+# IMPORTANT: evaluate() runs the target in a worker thread, and loading/using torch+CUDA models in a
+# non-main thread SEGFAULTS on Windows. So we run the agent in the MAIN thread up front and hand
+# evaluate() a pure dict-lookup target — only the CPU/API judges (deterministic + RAGAS + G-Eval)
+# then run in evaluate()'s threads, never the GPU agent.
+def _extract(state: dict) -> dict:
+    """JSON-serializable, evaluator-relevant fields (drop the heavy `candidates`)."""
+    return {
+        "answer": state.get("answer") or "",
+        "is_refusal": bool(state.get("is_refusal")),
+        "retrieved_ids": state.get("retrieved_ids") or [],
+        "context": state.get("context") or "",
+        "grounded_score": state.get("grounded_score"),
+        "terminal": state.get("terminal"),
+    }
 
 
-def make_target():
-    from hcft_agent.agents.rag_chat import answer, warmup
+def precompute_outputs(rows: list[dict]) -> dict:
+    """Run the live agent on every question in the MAIN thread; return {question: output_dict}.
 
+    CONFIRMED root cause of the Windows segfault: a LangSmith background thread (Client or tracer)
+    active while torch initializes CUDA crashes the process. So this runs with tracing forced OFF
+    and is called BEFORE any LangSmith Client exists — models load + the agent runs with no LangSmith
+    thread anywhere near torch."""
+    import os
+
+    from hcft_agent.agents.rag_chat import answer, build_app, warmup
+
+    os.environ["LANGSMITH_TRACING"] = "false"
+    print("[experiment] warming models in the main thread, tracing off (segfault guard) ...")
+    warmup()
+    build_app()                                   # compile the graph (this calls init_telemetry)...
+    os.environ["LANGSMITH_TRACING"] = "false"     # ...then keep the WHOLE precompute untraced
+    out = {}
+    for i, r in enumerate(rows, 1):
+        out[r["question"]] = _extract(answer(r["question"]))
+        if i % 5 == 0:
+            print(f"   ...agent ran {i}/{len(rows)}")
+    return out
+
+
+def make_target(precomputed: dict):
     def target(inputs: dict) -> dict:
-        if not _WARM["done"]:
-            warmup()
-            _WARM["done"] = True
-        s = answer(inputs["question"])
-        # keep only JSON-serializable, evaluator-relevant fields (drop heavy `candidates`)
-        return {
-            "answer": s.get("answer") or "",
-            "is_refusal": bool(s.get("is_refusal")),
-            "retrieved_ids": s.get("retrieved_ids") or [],
-            "context": s.get("context") or "",
-            "grounded_score": s.get("grounded_score"),
-            "terminal": s.get("terminal"),
-        }
-
+        return precomputed[inputs["question"]]          # instant dict lookup, thread-safe, no GPU
     return target
 
 
@@ -230,27 +260,30 @@ def _records_from_results(results) -> tuple[list[dict], dict, dict]:
     recs, ragas_rows, geval_rows = [], [], []
     f_all, a_all, g_all = [], [], []
     for item in results:
-        run, ex = item["run"], item["example"]
-        out, ref = run.outputs or {}, ex.outputs or {}
-        evs = {er.key: er.score for er in (item.get("evaluation_results") or {}).get("results", [])}
-        qid = ref.get("qa_id")
-        recs.append({
-            "qa_id": qid, "question": ex.inputs.get("question"),
-            "eval_kind": ref.get("eval_kind"), "hop_type": ref.get("hop_type"),
-            "gold_answer": ref.get("gold_answer") or "", "gold_chunk_ids": ref.get("gold_chunk_ids") or [],
-            "agent_answer": out.get("answer") or "", "is_refusal": bool(out.get("is_refusal")),
-            "retrieved_ids": out.get("retrieved_ids") or [], "context": out.get("context") or "",
-            "grounded_score": out.get("grounded_score"), "terminal": out.get("terminal"),
-        })
-        f, a = evs.get("ragas_faithfulness"), evs.get("ragas_answer_relevancy")
-        if f is not None or a is not None:
-            ragas_rows.append({"qa_id": qid, "faithfulness": f, "answer_relevancy": a})
-            if isinstance(f, (int, float)): f_all.append(f)
-            if isinstance(a, (int, float)): a_all.append(a)
-        g = evs.get("geval_refusal")
-        if isinstance(g, (int, float)):
-            geval_rows.append({"qa_id": qid, "score": g, "appropriate": g >= settings.geval_threshold})
-            g_all.append(g)
+        try:
+            run, ex = item["run"], item["example"]
+            out, ref = run.outputs or {}, ex.outputs or {}
+            evs = {er.key: er.score for er in (item.get("evaluation_results") or {}).get("results", [])}
+            qid = ref.get("qa_id")
+            recs.append({
+                "qa_id": qid, "question": ex.inputs.get("question"),
+                "eval_kind": ref.get("eval_kind"), "hop_type": ref.get("hop_type"),
+                "gold_answer": ref.get("gold_answer") or "", "gold_chunk_ids": ref.get("gold_chunk_ids") or [],
+                "agent_answer": out.get("answer") or "", "is_refusal": bool(out.get("is_refusal")),
+                "retrieved_ids": out.get("retrieved_ids") or [], "context": out.get("context") or "",
+                "grounded_score": out.get("grounded_score"), "terminal": out.get("terminal"),
+            })
+            f, a = evs.get("ragas_faithfulness"), evs.get("ragas_answer_relevancy")
+            if f is not None or a is not None:
+                ragas_rows.append({"qa_id": qid, "faithfulness": f, "answer_relevancy": a})
+                if isinstance(f, (int, float)): f_all.append(f)
+                if isinstance(a, (int, float)): a_all.append(a)
+            g = evs.get("geval_refusal")
+            if isinstance(g, (int, float)):
+                geval_rows.append({"qa_id": qid, "score": g, "appropriate": g >= settings.geval_threshold})
+                g_all.append(g)
+        except Exception as e:
+            print(f"[experiment] skipped a result row: {type(e).__name__}: {e}")
 
     ragas = {
         "n_scored": len(ragas_rows), "judge": settings.ragas_judge_model,
@@ -282,32 +315,48 @@ def main() -> None:
     ap.add_argument("--set-baseline", action="store_true")
     args = ap.parse_args()
 
+    import os
+
     from langsmith import Client, evaluate
-
     from hcft_agent.obs.telemetry import flush, init_telemetry
-    init_telemetry("hcft-agent")               # ensure runs nest under the experiment
 
-    client = Client()
     rows = agent_eval.load_slice(args.evalset, args.grounded, args.unanswerable, args.seed)
     print(f"[experiment] frozen slice: {len(rows)} ({args.grounded} grounded + {args.unanswerable} unanswerable)")
-    ds_id = sync_dataset(client, args.dataset, rows, recreate=args.recreate)
 
+    # 1. Run the agent (loads GPU models) FIRST, before any LangSmith Client exists — a LangSmith
+    #    background thread active during torch CUDA init segfaults on Windows (confirmed exit 139).
+    precomputed = precompute_outputs(rows)
+
+    # 2. Only now touch LangSmith (no torch loading past here). Keep the GLOBAL tracer OFF on purpose:
+    #    evaluate() builds the experiment + attaches every score through the Client directly, so it
+    #    needs NO env tracer. With tracing ON, the only thing that emits traces during evaluate() is the
+    #    judges (RAGAS/G-Eval) — and they orphan into the tracing project as independent root traces
+    #    (RAGAS's asyncio.run() drops the run-tree contextvars; DeepEval owns its client; and the agent
+    #    itself ran untraced in precompute, so there's no parent run to nest under). Off = clean
+    #    experiment, scores still per-run, no orphan noise. init_telemetry() only ensures the API key /
+    #    project env are loaded for the Client.
+    init_telemetry("hcft-agent")
+    os.environ["LANGSMITH_TRACING"] = "false"
+    client = Client()
+    ds_id = sync_dataset(client, args.dataset, rows, recreate=args.recreate)
     evaluators = [ev_refusal_correct, ev_retrieval_hit_exact, ev_retrieval_hit_doc, ev_hhem]
     if not args.no_judges:
+        _ragas(); _geval()                              # build judge objects before evaluate()'s threads
         evaluators += [ev_ragas_faithfulness, ev_ragas_relevancy, ev_geval]
 
     results = evaluate(
-        make_target(),
+        make_target(precomputed),
         data=args.dataset,
         evaluators=evaluators,
         summary_evaluators=[summ_answer_rate, summ_unanswerable_refuse_rate],
         experiment_prefix="hcft-agent",
         metadata={"reader": settings.reader_model, "retrieval_mode": settings.retrieval_mode,
                   "ragas_judge": settings.ragas_judge_model, "geval_judge": settings.geval_judge_model},
-        max_concurrency=1,                     # one GPU agent at a time; judges still batch internally
+        max_concurrency=4,                     # agent already ran in main; only API/CPU judges run here
     )
 
-    exp_name = getattr(results, "experiment_name", None)
+    exp_name = (getattr(results, "experiment_name", None)
+                or getattr(getattr(results, "_manager", None), "experiment_name", None))
     print(f"\n[experiment] LangSmith experiment: {exp_name}")
 
     # Rebuild records + judge dicts from the run-attached scores, then emit the shared report.

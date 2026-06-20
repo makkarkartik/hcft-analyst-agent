@@ -2,10 +2,12 @@
 ``agent_eval``. Two judges from DELIBERATELY different model families:
 
   * **RAGAS** faithfulness + answer-relevancy — run on a **cross-family** model (Fireworks
-    Llama-3.3-70B by default). Faithfulness decomposes the answer into atomic claims and runs an
-    NLI check of each against the retrieved context (2+ sequential LLM calls — why this is OFFLINE
-    only). Answer-relevancy back-generates questions from the answer and measures their embedding
-    similarity to the real one — "is the answer actually responsive".
+    gpt-oss-120b, a reasoning model; needs a generous max_tokens so its reasoning tokens don't truncate
+    the JSON — see config). Faithfulness decomposes the answer into atomic claims and runs an NLI check
+    of each against the retrieved context (2+ sequential LLM calls — why this is OFFLINE only).
+    Answer-relevancy back-generates questions from the answer and measures their embedding similarity
+    to the real one — "is the answer actually responsive". Cross-family is a second circularity break
+    on top of the κ deterministic anchor.
   * **DeepEval G-Eval** refusal-quality — a chain-of-thought, form-filling judge on the SAME
     family as the reader (OpenAI gpt-4o-mini). It scores, from the context alone, whether the
     answer-vs-refuse DECISION was correct. Same-family makes it the strict gate judge AND the one
@@ -62,10 +64,18 @@ def build_ragas():
     from ragas.llms import LangchainLLMWrapper
     from ragas.metrics import Faithfulness, ResponseRelevancy
 
-    judge = ChatOpenAI(                       # Fireworks via the OpenAI-compatible API = cross-family
+    judge_kwargs = dict(                      # bounded: a bad row fails to None, never wedges the run
         model=settings.ragas_judge_model, base_url=settings.ragas_judge_base_url,
         api_key=settings.ragas_judge_api_key, temperature=0.0,
+        timeout=settings.judge_timeout_s, max_retries=settings.judge_max_retries,
+        # gpt-oss is a REASONING model: it spends completion tokens on reasoning BEFORE the JSON, so a
+        # stingy budget truncates the JSON mid-output → parse fail → retry storm (the original crawl).
+        # Generous max_tokens + low reasoning effort = clean JSON in ~2s.
+        max_tokens=settings.ragas_judge_max_tokens,
     )
+    if settings.ragas_reasoning_effort:
+        judge_kwargs["model_kwargs"] = {"reasoning_effort": settings.ragas_reasoning_effort}
+    judge = ChatOpenAI(**judge_kwargs)
     emb = OpenAIEmbeddings(model=settings.ragas_embed_model, api_key=settings.orchestrator_api_key)
     llm = LangchainLLMWrapper(judge)
     ew = LangchainEmbeddingsWrapper(emb)

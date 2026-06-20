@@ -102,19 +102,28 @@ class Settings:
     #     cross-family second opinion that catches what a same-family judge would wave through.
     # The actual circularity-breaker is κ against a DETERMINISTIC anchor (gold, non-LLM) below.
     geval_judge_model: str = os.getenv("GEVAL_JUDGE_MODEL") or "gpt-4o-mini"
-    # RAGAS judge = the only NON-CHINESE serverless LLM this Fireworks key reaches: OpenAI's open-
-    # weight gpt-oss-120b (Apache-2.0 MoE). It's a DIFFERENT model + training recipe from the
-    # gpt-4o-mini reader/G-Eval (cross-MODEL, served off a different stack), though same vendor
-    # lineage — so weaker than a true cross-vendor judge (Gemma/Nemotron aren't on this key). The
-    # κ deterministic anchor is what actually breaks circularity; this adds a structured
-    # claim-decomposition+NLI second opinion. Verified: supported→1.0, hallucinated→0.0.
-    ragas_judge_model: str = (
-        os.getenv("RAGAS_JUDGE_MODEL") or "accounts/fireworks/models/gpt-oss-120b"
-    )
+    # RAGAS judge = Fireworks gpt-oss-120b — a genuine CROSS-FAMILY judge (different vendor + training
+    # recipe from the gpt-4o-mini reader/G-Eval), the strongest circularity break this key reaches
+    # (Chinese models excluded; Llama/Gemma/Nemotron aren't on this serverless key). It's a REASONING
+    # model: it emits reasoning tokens (in a separate `reasoning_content` field) BEFORE the JSON, so
+    # the judge client MUST grant a generous max_tokens or the JSON truncates mid-output and RAGAS
+    # retry-storms. The ~7-min/row crawl we first hit was exactly THIS — a max_tokens bug, NOT a model
+    # incompatibility (my first "returns empty content" read was an artifact of probing with
+    # max_tokens=5). With max_tokens=2048 + reasoning_effort=low it returns clean JSON in ~2s and
+    # discriminates cleanly (supported→1.0, hallucinated→0.0, verified). Blank RAGAS_REASONING_EFFORT
+    # if you ever swap to a NON-reasoning judge (gpt-4o-mini rejects the param).
+    ragas_judge_model: str = os.getenv("RAGAS_JUDGE_MODEL") or "accounts/fireworks/models/gpt-oss-120b"
     ragas_judge_base_url: str = os.getenv("RAGAS_JUDGE_BASE_URL") or "https://api.fireworks.ai/inference/v1"
     ragas_judge_api_key: str = os.getenv("RAGAS_JUDGE_API_KEY") or os.getenv("FIREWORKS_API_KEY", "")
+    ragas_judge_max_tokens: int = int(os.getenv("RAGAS_JUDGE_MAX_TOKENS") or "2048")
+    ragas_reasoning_effort: str = os.getenv("RAGAS_REASONING_EFFORT", "low")  # blank => omit (non-reasoning judges)
     # Answer-relevancy needs an embedder; OpenAI's small model keeps it cheap + dependency-free.
     ragas_embed_model: str = os.getenv("RAGAS_EMBED_MODEL") or "text-embedding-3-small"
+    # A judge call MUST be bounded — a slow/incompatible judge (see the gpt-oss-120b reasoning-model
+    # thrash above) should fail a single row to None, never wedge the whole experiment. Per-request
+    # timeout + few retries on the judge client.
+    judge_timeout_s: float = float(os.getenv("JUDGE_TIMEOUT_S") or "60")
+    judge_max_retries: int = int(os.getenv("JUDGE_MAX_RETRIES") or "2")
     geval_threshold: float = 0.5        # G-Eval score ≥ this -> judge says "appropriate"
     # κ judge-validation: deterministic anchor by default. Drop a human-labeled JSONL here
     # (one {"qa_id":..., "appropriate": bool} per line) to upgrade to a true HUMAN κ.
