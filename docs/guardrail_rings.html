@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HCFT Agent — Guardrail rings (defense in depth)</title>
+<style>
+  :root{
+    --bg:#0d1117; --ink:#e6edf3; --muted:#8b949e;
+    --in:#f85149; --in-bg:#2a1416; --in-bd:#b62324;
+    --core:#2f81f7; --core-bg:#0d2540; --core-bd:#1f6feb;
+    --act:#a371f7; --act-bg:#1e1633; --act-bd:#8957e5;
+    --out:#3fb950; --out-bg:#0f2a17; --out-bd:#238636;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:30px 34px 54px;background:var(--bg);color:var(--ink);
+    font:14px/1.5 'Inter',-apple-system,'Segoe UI',Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  h1{font-size:20px;margin:0 0 3px}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 22px;max-width:880px}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:22px}
+  .pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600;
+    border:1px solid currentColor;margin-left:6px}
+  .pill.live{color:#3fb950}.pill.partial{color:#d8a23a}.pill.gray{color:#8a94a3}.pill.planned{color:#f85149;opacity:.65}
+
+  .wrap{max-width:1000px}
+  .ring{border-radius:16px;padding:16px 18px}
+  .ring-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px}
+  .ring-d{font-size:12px;color:var(--muted);margin-bottom:12px}
+  .guards{display:flex;gap:10px;flex-wrap:wrap}
+  .g{border-radius:10px;padding:8px 11px;font-size:12.5px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.08)}
+  .g .gt{font-weight:600}
+  .g .gd{color:var(--muted);font-size:11.5px;margin-top:2px}
+
+  /* INPUT RING (outermost) */
+  .input{background:var(--in-bg);border:2px solid var(--in-bd)}
+  .input>.ring-h{color:var(--in)}
+
+  /* OUTPUT RING band */
+  .output{background:var(--out-bg);border:2px solid var(--out-bd);margin-top:14px}
+  .output>.ring-h{color:var(--out)}
+
+  /* AGENT CORE */
+  .core{background:var(--core-bg);border:2px solid var(--core-bd);margin:14px 0}
+  .core>.ring-h{color:var(--core)}
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;color:#cdd9e5;margin:6px 0 12px}
+  .node{background:#0a1d38;border:1px solid var(--core-bd);border-radius:8px;padding:4px 10px;font-weight:600}
+  .arr{color:var(--core)}
+
+  /* ACTION RING (nested in core) */
+  .action{background:var(--act-bg);border:2px dashed var(--act-bd)}
+  .action>.ring-h{color:var(--act)}
+
+  .ingress,.egress{text-align:center;color:var(--muted);font-size:12px;margin:8px 0}
+  .ingress b{color:var(--in)} .egress b{color:var(--out)}
+  .foot{color:var(--muted);font-size:12px;margin-top:18px;max-width:920px}
+</style>
+</head>
+<body>
+  <h1>HCFT Agent — Guardrail rings (defense in depth)</h1>
+  <p class="sub">Concentric rings, not a single wall: a request is checked on the way <b>in</b> (input ring),
+     around any <b>action</b> it takes (action ring), and on the way <b>out</b> (output ring). Each ring
+     fails independently, so one bypass isn't a full compromise. Agentic ≠ API security — the threats here
+     are prompt injection (incl. via retrieved chunks), the confused deputy, and ungrounded output.</p>
+
+  <div class="legend">
+    <span><span class="pill live">live</span> enforced now</span>
+    <span><span class="pill partial">partial</span> detected, not enforced</span>
+    <span><span class="pill gray">N/A</span> by design</span>
+    <span><span class="pill planned">planned</span> not yet built</span>
+  </div>
+
+  <div class="wrap">
+    <div class="ingress">▼ &nbsp; user request enters through the <b>input ring</b></div>
+
+    <!-- INPUT RING -->
+    <div class="ring input">
+      <div class="ring-h">① Input ring — ingress</div>
+      <div class="ring-d">guards on what ENTERS, before the agent acts</div>
+      <div class="guards">
+        <div class="g"><div class="gt">prompt injection <span class="pill live">live</span> <span class="pill planned">→ Prompt-Guard-2</span></div>
+          <div class="gd">fail-closed on override attempts; heuristic now → Llama-Prompt-Guard-2-86M (mDeBERTa)</div></div>
+        <div class="g"><div class="gt">PII <span class="pill partial">partial</span> <span class="pill planned">→ Presidio</span></div>
+          <div class="gd">detected on the trace; redact-before-embed/log via Microsoft Presidio = the gap</div></div>
+        <div class="g"><div class="gt">jailbreak / secrets <span class="pill planned">planned</span></div>
+          <div class="gd">covered by Prompt-Guard-2 (jailbreak) + a secrets scanner</div></div>
+      </div>
+
+      <!-- AGENT CORE -->
+      <div class="ring core">
+        <div class="ring-h">Agent core — LangGraph</div>
+        <div class="flow">
+          <span class="node">retrieve</span><span class="arr">→</span>
+          <span class="node">grade</span><span class="arr">→</span>
+          <span class="node">rewrite ⟲</span><span class="arr">→</span>
+          <span class="node">generate</span>
+        </div>
+
+        <!-- ACTION RING -->
+        <div class="ring action">
+          <div class="ring-h">② Action ring — around tool / action use</div>
+          <div class="ring-d">guards on what the agent DOES (the confused-deputy / sandbox layer)</div>
+          <div class="guards">
+            <div class="g"><div class="gt">doc-level authorization <span class="pill gray">N/A</span></div>
+              <div class="gd">scope retrieval to the caller's permitted docs — N/A: HCFT corpus is public</div></div>
+            <div class="g"><div class="gt">tool allowlist · sandbox · HITL <span class="pill gray">N/A (RAG)</span> <span class="pill planned">P4</span></div>
+              <div class="gd">RAG calls no tools; this ring goes live for the code-gen agent (AST allowlist + subprocess + human gate)</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- OUTPUT RING -->
+    <div class="ring output">
+      <div class="ring-h">③ Output ring — egress</div>
+      <div class="ring-d">guards on what LEAVES, before it reaches the user</div>
+      <div class="guards">
+        <div class="g"><div class="gt">groundedness <span class="pill live">live</span></div>
+          <div class="gd">HHEM cross-encoder; score &lt; floor → refuse, don't fabricate (refuse &gt; fabricate)</div></div>
+        <div class="g"><div class="gt">refusal contract <span class="pill live">live</span></div>
+          <div class="gd">prompt forces "not enough info" over a guess; honest refusal ≠ failure</div></div>
+        <div class="g"><div class="gt">PII leak <span class="pill planned">planned</span></div>
+          <div class="gd">de-anonymize / scan the answer so retrieved PII doesn't leak out</div></div>
+      </div>
+    </div>
+
+    <div class="egress">▼ &nbsp; answer leaves through the <b>output ring</b> &nbsp; → &nbsp; user</div>
+
+    <p class="foot"><b>Why rings (defense in depth):</b> fail-closed guards (a guard error blocks) vs fail-open
+      observability (a telemetry error never blocks). Eval/guard duality: every guard has an offline eval
+      twin (e.g. live HHEM groundedness ⇄ offline RAGAS faithfulness). The map of which guard binds to which
+      step lives in <code>pipeline_map.html</code>; this view is the security model behind it.</p>
+  </div>
+</body>
+</html>

@@ -109,6 +109,7 @@ node into its own root trace; LangChain's native tracer nests across those threa
   - [`SESSION_LOG.md`](docs/SESSION_LOG.md) — the design record + measured results
   - [`CONCEPTS.md`](docs/CONCEPTS.md) — tracked glossary of every eval/safety/obs concept
   - [`pipeline_map.html`](docs/pipeline_map.html) — the living step × evaluation × guardrail map (the README image is a snapshot of this)
+  - [`guardrail_rings.html`](docs/guardrail_rings.html) — the defense-in-depth security model (input / action / output rings)
 
 ## Stack
 
