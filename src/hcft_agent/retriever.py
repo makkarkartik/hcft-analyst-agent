@@ -84,27 +84,56 @@ class Retriever:
             out[doc["_id"]] = doc
         return out
 
-    # ---- core retrieval ----
-    def _rank(self, question: str, rerank: bool = True) -> list[dict]:
-        """Full candidate list in DENSE order (Pinecone score desc), hydrated, with a
-        ``rerank_score`` added per candidate when ``rerank`` is set. NOT truncated — the
-        caller decides. Shared by :meth:`retrieve` (pipeline) and :meth:`candidates` (eval).
-
-        Each sub-stage is its own nested LangSmith run (embed / pinecone_query / hydrate /
-        rerank) so the latency breakdown shows up under the caller's run — no ad-hoc timing."""
+    # ---- retrieval arms ----
+    def _dense_ids(self, question: str) -> list[tuple[str, float]]:
+        """Pinecone dense arm: (chunk_id, cosine score) in rank order."""
         from hcft_agent.obs.telemetry import trace_block
 
         with trace_block("retriever.embed", run_type="embedding"):
             vec = self.embed_query(question)
-
-        with trace_block("retriever.pinecone_query", run_type="retriever"):
+        with trace_block("retriever.dense_query", run_type="retriever"):
             res = self._get_index().query(
-                vector=vec.tolist(), top_k=settings.dense_top_k, include_metadata=True
+                vector=vec.tolist(), top_k=settings.dense_top_k, include_metadata=False
             )
-        ids, dense = [], {}
-        for m in res.get("matches", []):
-            ids.append(m["id"])
-            dense[m["id"]] = float(m["score"])
+        return [(m["id"], float(m["score"])) for m in res.get("matches", [])]
+
+    def _sparse_ids(self, question: str) -> list[tuple[str, float]]:
+        """Lexical (BM25-style) arm via MongoDB ``$text`` search: (chunk_id, textScore)."""
+        from hcft_agent.obs.telemetry import trace_block
+
+        with trace_block("retriever.sparse_query", run_type="retriever"):
+            cur = (self._get_collection()
+                   .find({"$text": {"$search": question}}, {"score": {"$meta": "textScore"}})
+                   .sort([("score", {"$meta": "textScore"})])
+                   .limit(settings.sparse_top_k))
+            return [(d["_id"], float(d["score"])) for d in cur]
+
+    @staticmethod
+    def _rrf(ranked_lists: list[list[tuple[str, float]]], k: int, top_k: int) -> list[str]:
+        """Reciprocal Rank Fusion: score(d) = Σ 1/(k + rank_i(d)). Rank-based, so the two arms'
+        incomparable score scales don't matter. Returns the fused chunk_ids, best first."""
+        from collections import defaultdict
+
+        fused: dict[str, float] = defaultdict(float)
+        for lst in ranked_lists:
+            for rank, (cid, _) in enumerate(lst, 1):
+                fused[cid] += 1.0 / (k + rank)
+        return [cid for cid, _ in sorted(fused.items(), key=lambda x: -x[1])][:top_k]
+
+    # ---- core retrieval ----
+    def _rank(self, question: str, rerank: bool = True, mode: str | None = None) -> list[dict]:
+        """Full candidate list, hydrated, with ``rerank_score`` added when ``rerank`` is set.
+        ``mode`` = "dense" (Pinecone only) or "hybrid" (dense + sparse fused by RRF); defaults to
+        ``settings.retrieval_mode``. NOT truncated — the caller decides."""
+        from hcft_agent.obs.telemetry import trace_block
+
+        mode = mode or settings.retrieval_mode
+        dense = self._dense_ids(question)
+        dense_score = dict(dense)
+        if mode == "hybrid":
+            ids = self._rrf([dense, self._sparse_ids(question)], settings.rrf_k, settings.dense_top_k)
+        else:
+            ids = [cid for cid, _ in dense]
 
         with trace_block("retriever.hydrate", run_type="tool"):
             hydrated = self._hydrate(ids)
@@ -113,7 +142,7 @@ class Retriever:
             doc = hydrated.get(cid, {})
             cands.append({
                 "chunk_id": cid,
-                "dense_score": dense[cid],
+                "dense_score": dense_score.get(cid, 0.0),  # 0.0 if it came only from the sparse arm
                 "text": doc.get("text", ""),
                 "doc_id": doc.get("doc_id"),
                 "hospital": doc.get("hospital"),
@@ -138,11 +167,10 @@ class Retriever:
             cands = sorted(cands, key=lambda c: c["rerank_score"], reverse=True)
         return cands[: settings.final_top_k]
 
-    def candidates(self, question: str) -> list[dict]:
-        """Eval hook: ALL ``dense_top_k`` candidates in dense order, each carrying
-        ``dense_score`` and ``rerank_score`` — so retrieval metrics can be measured at both
-        the dense (pre-rerank) and reranked stages from a single call."""
-        return self._rank(question, rerank=True)
+    def candidates(self, question: str, mode: str | None = None) -> list[dict]:
+        """Eval hook: ALL candidates with ``dense_score`` + ``rerank_score``. ``mode`` overrides
+        the configured retrieval mode so a dense-vs-hybrid A/B runs in one process."""
+        return self._rank(question, rerank=True, mode=mode)
 
     # ---- assemble the context string fed to the LLM ----
     def build_context(self, hits: list[dict]) -> str:

@@ -47,6 +47,13 @@ class Settings:
     context_top_k: int = 5              # concatenated into the LLM prompt
     context_char_cap: int = 1800        # per-chunk char cap when assembling context
 
+    # Retrieval mode: "dense" (Pinecone only) or "hybrid" (dense + Mongo $text BM25, fused by RRF).
+    # Hybrid catches exact terms (figures, named entities) that dense embeddings miss. Default
+    # hybrid — measured A/B on v3 (scripts/retrieval_ab.py): recall@50 +0.10, hit@5 +0.10.
+    retrieval_mode: str = os.getenv("RETRIEVAL_MODE") or "hybrid"
+    sparse_top_k: int = 50              # candidates from the lexical (BM25) arm before fusion
+    rrf_k: int = 60                     # Reciprocal Rank Fusion constant (standard default)
+
     # --- RAG chat agent: deterministic gates (no gold at inference) ---
     # grade gate: top reranked candidate must clear this score to be "answerable".
     # Calibrated 2026-06-19 (`eval.retrieval --calibrate`) -> rerank_score is a WEAK gate, two
