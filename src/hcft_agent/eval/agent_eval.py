@@ -72,29 +72,62 @@ def collect(rows: list[dict]) -> list[dict]:
 
 # --------------------------------------------------------------------- deterministic metrics
 def refusal_accuracy(recs: list[dict]) -> dict:
-    """Did the agent refuse exactly when it should? (outcome metric, no judge needed.)"""
-    tp = fp = tn = fn = 0
-    for r in recs:
-        should_refuse = r["eval_kind"] == "unanswerable_rag"
-        did_refuse = r["is_refusal"]
-        if should_refuse and did_refuse: tn += 1          # correct refusal
-        elif should_refuse and not did_refuse: fp += 1    # answered the unanswerable (hallucination risk)
-        elif not should_refuse and did_refuse: fn += 1    # refused an answerable (over-refusal)
-        else: tp += 1                                     # correctly answered
-    n = len(recs)
+    """Refusal quality DECOMPOSED by retrieval — you can't grade the generator's refusal without
+    knowing whether retrieval surfaced the answer. Three regimes:
+
+      * answerable-in-context (grounded, gold chunk retrieved): should ANSWER → refusal is the
+        real over-refusal (the generator's failure).
+      * retrieval-miss (grounded, gold NOT retrieved): refusing is CORRECT (can't answer);
+        answering = fabrication. This isolates retrieval failures from the generator.
+      * unanswerable: should REFUSE; answering = fabrication.
+    """
+    def got_gold(r):
+        return bool(set(r["gold_chunk_ids"]) & set(r["retrieved_ids"]))
+
+    in_ctx = [r for r in recs if r["eval_kind"] != "unanswerable_rag" and got_gold(r)]
+    miss = [r for r in recs if r["eval_kind"] != "unanswerable_rag" and not got_gold(r)]
+    unans = [r for r in recs if r["eval_kind"] == "unanswerable_rag"]
+
+    def rate(rows, cond):
+        return round(sum(1 for r in rows if cond(r)) / len(rows), 3) if rows else None
+
     return {
-        "accuracy": (tp + tn) / n if n else 0.0,
-        "answered_correctly": tp, "over_refused": fn,
-        "correct_refusals": tn, "missed_refusals(answered_unanswerable)": fp,
+        "answerable_in_context": {
+            "n": len(in_ctx),
+            "answered": sum(1 for r in in_ctx if not r["is_refusal"]),
+            "over_refused": sum(1 for r in in_ctx if r["is_refusal"]),
+            "answer_rate": rate(in_ctx, lambda r: not r["is_refusal"]),  # want HIGH
+        },
+        "unanswerable": {
+            "n": len(unans),
+            "correct_refusals": sum(1 for r in unans if r["is_refusal"]),
+            "fabricated": sum(1 for r in unans if not r["is_refusal"]),
+            "refuse_rate": rate(unans, lambda r: r["is_refusal"]),        # want HIGH
+        },
+        "grounded_retrieval_miss": {
+            "n": len(miss),
+            "correctly_refused": sum(1 for r in miss if r["is_refusal"]),
+            "fabricated": sum(1 for r in miss if not r["is_refusal"]),    # answered w/o the evidence
+        },
     }
 
 
+def _doc_of(chunk_id: str) -> str:
+    """chunk_id is '<doc_id>_p<page>_c<idx>' -> doc_id."""
+    return chunk_id.split("_p")[0]
+
+
 def retrieval_hit_at_k(recs: list[dict]) -> dict:
-    """Gold chunk in the context window the generator read (grounded rows only)."""
+    """Bracket retrieval quality: EXACT (gold chunk in the window) vs DOC-LEVEL (gold's document
+    in the window). The honest range — exact under-credits near-misses to adjacent chunks; the
+    truth sits between the two. Grounded rows only."""
     grounded = [r for r in recs if r["eval_kind"] != "unanswerable_rag"]
-    hits = sum(1 for r in grounded if set(r["gold_chunk_ids"]) & set(r["retrieved_ids"]))
-    return {f"hit@{settings.context_top_k}": hits / len(grounded) if grounded else 0.0,
-            "n_grounded": len(grounded)}
+    n = len(grounded) or 1
+    exact = sum(1 for r in grounded if set(r["gold_chunk_ids"]) & set(r["retrieved_ids"]))
+    doc = sum(1 for r in grounded
+              if {_doc_of(c) for c in r["gold_chunk_ids"]} & {_doc_of(c) for c in r["retrieved_ids"]})
+    k = settings.context_top_k
+    return {f"hit@{k}_exact": exact / n, f"hit@{k}_doclevel": doc / n, "n_grounded": len(grounded)}
 
 
 def overlap_metrics(recs: list[dict]) -> dict | None:

@@ -17,10 +17,14 @@ import re
 from hcft_agent.config import settings
 
 _SYSTEM = (
-    "You are a healthcare-facility analyst. Answer the question using ONLY the numbered "
-    "sources provided. If the sources do not contain the answer, reply exactly: "
+    "You are a healthcare-facility analyst. Answer ONLY if the numbered sources contain the "
+    "SPECIFIC information the question asks for. Being on the same topic is NOT enough: if the "
+    "sources discuss the area but lack the exact figure, plan, year, population, or detail "
+    "requested, you MUST reply EXACTLY: "
     "\"I don't have enough information in the provided sources to answer that.\" "
-    "Do not use outside knowledge. Cite every source you rely on inline as [Source N]."
+    "Do not infer, generalize, estimate, or fill gaps from outside knowledge — a partial or "
+    "approximate answer assembled from related text is a failure; refusing is correct. When you "
+    "do answer, every claim must be directly stated in a source, cited inline as [Source N]."
 )
 
 _CITE_RE = re.compile(r"\[Source\s+(\d+)\]", re.IGNORECASE)
