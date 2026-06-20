@@ -207,8 +207,8 @@
     <div class="row">
       <div class="cell step flow"><div class="t">generate (reader LLM)</div>
         <div class="d">answer ONLY from numbered sources · <code>[Source N]</code> citations · streamed</div></div>
-      <div class="cell eval"><div class="t">faithfulness · answer-relevancy <span class="pill red planned">planned</span></div>
-        <div class="d">RAGAS, offline (2–5 s/query — kept OUT of the hot path); + G-Eval refusal-correctness</div>
+      <div class="cell eval"><div class="t">faithfulness · answer-relevancy <span class="pill green">built · offline</span></div>
+        <div class="d">RAGAS on a cross-model judge (gpt-oss-120b), offline (2–5 s/query — OUT of the hot path); + G-Eval refusal-correctness</div>
         <span class="live">live: citation → chunk_id mapping (which sources the answer actually used)</span></div>
       <div class="cell guard"><div class="t">refusal contract</div>
         <div class="d">prompt forces "not enough info" over a guess — refuse &gt; fabricate, at generation time</div></div>
@@ -218,7 +218,7 @@
     <div class="row">
       <div class="cell step flow"><div class="t">output guard (HHEM)</div>
         <div class="d">P(answer grounded in context) over the FULL context (T5 = relative pos, no 512 limit)</div></div>
-      <div class="cell eval"><div class="t">faithfulness (rigorous) <span class="pill red planned">planned</span></div>
+      <div class="cell eval"><div class="t">faithfulness (rigorous) <span class="pill green">built · offline</span></div>
         <div class="d">RAGAS claim-decomposition + NLI, offline — the slow, thorough counterpart to the live guard</div>
         <span class="live">live: HHEM cross-encoder ~tens of ms · deterministic · non-circular</span></div>
       <div class="cell guard"><div class="t">groundedness floor</div>
@@ -229,13 +229,13 @@
     <div class="row">
       <div class="cell step"><div class="t">terminal: answer | refuse</div>
         <div class="d"><code>hcft.terminal</code> + <code>hcft.is_refusal</code> on the trace</div></div>
-      <div class="cell eval"><div class="t">refusal accuracy · routing <span class="pill red planned">planned</span></div>
-        <div class="d">G-Eval custom metrics + a human-anchored slice (κ) to break judge circularity</div></div>
+      <div class="cell eval"><div class="t">refusal accuracy · routing <span class="pill green">built · offline</span></div>
+        <div class="d">refusal decomposed BY retrieval (3 regimes) + G-Eval, validated by Cohen's κ vs a deterministic anchor (breaks judge circularity)</div></div>
       <div class="cell guard"><div class="t">degradation policy</div>
         <div class="d">honest refusal ≠ fabrication failure; fail-closed guards, fail-open observability</div></div>
     </div>
 
-    <p class="foot" style="padding:0 18px;">Live now: grade gate · rewrite loop · streamed generation · HHEM groundedness guard. Traced natively to LangSmith (one nested tree/run). Offline RAGAS/DeepEval/G-Eval = next.</p>
+    <p class="foot" style="padding:0 18px;">Live: grade gate · rewrite loop · streamed generation · HHEM groundedness guard, traced natively to LangSmith. Offline eval stack BUILT: RAGAS (cross-model) + DeepEval G-Eval + Cohen's κ + a baselined pytest regression gate, run as a LangSmith Experiment over a Dataset (scores linked to runs).</p>
   </section>
 
 </body>
