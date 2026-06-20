@@ -37,6 +37,10 @@ evaluate
 rouge-score
 bert-score
 
-# Guardrails (input ring) — pin specific models at P2:
-#   Llama Guard / Prompt Guard via `transformers`; nemoguardrails / guardrails-ai TBD
+# Guardrails — input ring:
+#   PII: Microsoft Presidio (needs a spaCy model: `python -m spacy download en_core_web_lg`)
+#   injection: protectai/deberta-v3-base-prompt-injection-v2 via `transformers` (open);
+#     swap to meta-llama/Llama-Prompt-Guard-2-86M via INJECTION_MODEL + HF_TOKEN (gated)
+presidio-analyzer
+presidio-anonymizer
 streamlit

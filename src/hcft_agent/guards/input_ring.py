@@ -1,56 +1,78 @@
 """Input ring — the first guardrail, on the raw user query before it enters the graph.
 
-Two concerns, both at the *input* boundary (cf. the output ring, which checks groundedness):
-  * **prompt injection** — attempts to override the system/instructions ("ignore previous…").
-  * **PII** — query-side personal data we shouldn't retrieve on or log verbatim.
+Two concerns at the input boundary:
+  * **prompt injection** — a trained classifier (:mod:`injection`), keyword regex as fallback.
+  * **PII** — Microsoft Presidio detects AND **redacts** (:mod:`pii`); we enforce, not just flag.
 
-This is a fast HEURISTIC first pass (regex/keyword). It is deliberately a placeholder for a
-trained classifier — the industry tool here is **Meta Prompt-Guard-86M** (a fine-tuned
-DeBERTa for jailbreak/injection detection), which we'll swap in behind this same
-``scan()`` signature. Heuristics catch the obvious and cost ~nothing; the model catches the
-subtle. Per our ground rule we adopt the tool, but ship the cheap gate first so the ring
-exists end-to-end on day one.
-
-``scan()`` returns the list of flags (empty == clean). Policy (fail-closed on injection) lives
-in the graph node, not here — this only *detects*.
+This module is a thin orchestrator over the two industry implementations, with cheap regex
+fallbacks so the ring still works (degraded) if a model fails to load — fail-open on the *tool*,
+but the detection itself is fail-closed (a positive blocks). Policy (what to do on a hit) lives
+in the graph's ``input_guard`` node; this layer only detects + redacts.
 """
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
-# Override / jailbreak phrasings. Lowercased substring match — crude but high-precision.
+from .injection import InjectionGuard
+from .pii import PIIGuard
+
+# --- regex fallbacks (used only if the models fail to load) ---
 _INJECTION_PATTERNS = [
     r"ignore (all |the )?(previous|prior|above) (instructions|prompts?)",
     r"disregard (all |the )?(previous|prior|above)",
     r"forget (everything|all|your) (instructions|context)",
-    r"you are now",
-    r"new instructions?:",
-    r"system prompt",
-    r"reveal (your |the )?(system )?prompt",
-    r"act as (if|though|a)",
-    r"developer mode",
-    r"do anything now|\bDAN\b",
+    r"you are now", r"new instructions?:", r"system prompt",
+    r"reveal (your |the )?(system )?prompt", r"developer mode", r"do anything now|\bDAN\b",
 ]
-
-# PII signatures. Coarse on purpose — recall over precision at a guardrail.
 _PII_PATTERNS = {
-    "ssn": r"\b\d{3}-\d{2}-\d{4}\b",
-    "email": r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b",
-    "phone": r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",
+    "US_SSN": r"\b\d{3}-\d{2}-\d{4}\b",
+    "EMAIL_ADDRESS": r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b",
+    "PHONE_NUMBER": r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",
 }
-
 _INJECTION_RE = [re.compile(p, re.IGNORECASE) for p in _INJECTION_PATTERNS]
 _PII_RE = {k: re.compile(p) for k, p in _PII_PATTERNS.items()}
 
 
-def scan(text: str) -> list[str]:
-    """Return guardrail flags for a query. ``[]`` means clean.
+@lru_cache(maxsize=1)
+def _injection_guard() -> InjectionGuard:
+    return InjectionGuard()
 
-    Flags: ``"injection"`` and/or ``"pii:<kind>"`` (e.g. ``"pii:email"``)."""
+
+@lru_cache(maxsize=1)
+def _pii_guard() -> PIIGuard:
+    return PIIGuard()
+
+
+def is_injection(text: str) -> tuple[bool, float]:
+    """(is_injection, score). Model first; regex fallback if the model can't load."""
+    try:
+        return _injection_guard().is_injection(text)
+    except Exception:
+        return any(rx.search(text) for rx in _INJECTION_RE), 0.0
+
+
+def redact(text: str) -> tuple[str, list[str]]:
+    """(redacted_text, pii_entity_types). Presidio; regex fallback. Enforcement, not just flags."""
+    try:
+        return _pii_guard().redact(text)
+    except Exception:
+        ents = [k for k, rx in _PII_RE.items() if rx.search(text)]
+        out = text
+        for k in ents:
+            out = _PII_RE[k].sub(f"<{k}>", out)
+        return out, sorted(set(ents))
+
+
+def scan(text: str) -> list[str]:
+    """Compatibility helper (used by the UI): flags only, no redaction.
+    Returns e.g. ['injection', 'pii:EMAIL_ADDRESS']."""
     flags: list[str] = []
-    if any(rx.search(text) for rx in _INJECTION_RE):
+    if is_injection(text)[0]:
         flags.append("injection")
-    for kind, rx in _PII_RE.items():
-        if rx.search(text):
-            flags.append(f"pii:{kind}")
+    try:
+        ents = _pii_guard().scan(text)
+    except Exception:
+        ents = [k for k, rx in _PII_RE.items() if rx.search(text)]
+    flags += [f"pii:{e}" for e in ents]
     return flags

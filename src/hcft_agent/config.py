@@ -65,5 +65,20 @@ class Settings:
     hhem_model: str = "vectara/hallucination_evaluation_model"
     grounded_min_score: float = 0.5     # below -> refuse rather than risk fabrication
 
+    # --- input ring: prompt-injection classifier ---
+    # Open, non-gated default. Swap to meta-llama/Llama-Prompt-Guard-2-86M by setting
+    # INJECTION_MODEL + accepting the Meta license + HF_TOKEN (that model is gated).
+    injection_model: str = os.getenv("INJECTION_MODEL") or "protectai/deberta-v3-base-prompt-injection-v2"
+    injection_threshold: float = 0.5
+
+    # --- input ring: PII detection + redaction (Microsoft Presidio) ---
+    # Redact only UNAMBIGUOUS identifiers — NOT PERSON/LOCATION/DATE, which are often legitimate
+    # query content (e.g. "hospitals in California") and whose redaction would wreck retrieval.
+    pii_score_threshold: float = 0.5
+    pii_redact_entities: tuple = (
+        "EMAIL_ADDRESS", "PHONE_NUMBER", "US_SSN", "CREDIT_CARD", "US_BANK_NUMBER",
+        "IBAN_CODE", "US_DRIVER_LICENSE", "MEDICAL_LICENSE", "IP_ADDRESS", "CRYPTO",
+    )
+
 
 settings = Settings()

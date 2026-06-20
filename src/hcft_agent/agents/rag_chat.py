@@ -61,12 +61,19 @@ def _rewriter():
 # tag() so the hcft.* values are queryable on the node's run.
 
 def input_guard(state: RagState) -> dict:
-    """Scan the raw query; fail CLOSED on injection (refuse before retrieving)."""
+    """Scan the raw query; fail CLOSED on injection, and REDACT PII before it's embedded/logged.
+
+    PII redaction is enforcement, not just detection: the redacted query is what flows downstream
+    (into Pinecone and onto the trace) — the raw PII never leaves this node. We redact only
+    unambiguous identifiers, so retrieval-relevant entities (place/org names) are preserved."""
     q = state["question"]
-    flags = input_ring.scan(q)
-    tag(**{"hcft.input_flags": flags or None})
-    out: dict = {"input_flags": flags, "query": q, "retries": 0}
-    if "injection" in flags:
+    injected, inj_score = input_ring.is_injection(q)
+    redacted, pii_entities = input_ring.redact(q)          # enforce: query is now PII-free
+    flags = (["injection"] if injected else []) + [f"pii:{e}" for e in pii_entities]
+    tag(**{"hcft.input_flags": flags or None, "hcft.injection_score": round(inj_score, 3),
+           "hcft.pii_redacted": pii_entities or None})
+    out: dict = {"input_flags": flags, "query": redacted, "retries": 0}
+    if injected:
         out.update(degraded=True, degraded_reason="input_injection")
     return out
 
